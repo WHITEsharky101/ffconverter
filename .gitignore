@@ -1,0 +1,11 @@
+# Ignore plans directory
+plans/
+# Ignore project_info directory
+project_info/
+# Ignore specific data files
+streams_data.pkl
+convertlist.txt
+# Ignore virtual environment
+.venv/
+# Ignore IDE settings
+.idea/
