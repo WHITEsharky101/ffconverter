@@ -7,8 +7,8 @@ FFConverter is an automated video/audio conversion tool built on FFmpeg, specifi
 - **Interactive Configuration Wizard**: Step-by-step setup for conversion parameters and stream mappings
 - **Intelligent Stream Mapping**: Automatic detection and selection of embedded audio/subtitle tracks
 - **External Stream Support**: Ability to add external audio and subtitle files
-- **Font Attachment**: Automatically discovers and attaches fonts from ZIP/RAR archives for ASS subtitles
-- **Flexible Encoding Options**: Support for HEVC (libx265), H264 (libx264), and copy modes
+- **Font Attachment**: Automatically discovers and attaches fonts from ZIP/RAR archives for ASS subtitles; embedded (attached-in-source) fonts are preserved in MKV output
+- **Flexible Encoding Options**: Support for HEVC (libx265), H264 (libx264), and copy modes, with 8/10/12-bit depth selection
 - **Batch Processing**: Convert multiple episodes with configurable ranges
 - **Special Episode Handling**: Proper handling of season "00" for OVAs and specials
 - **Conversion Logging**: Persistent log of all conversions with timing information
@@ -78,6 +78,8 @@ ffconverter/
 - HEVC (libx265 with hvc1 tag)
 - H264 (libx264)
 - AV1 (libaom-av1) - noted as unavailable
+
+**Bit Depth**: 8/10/12-bit selection maps to `-pix_fmt yuv420p` / `yuv420p10le` / `yuv420p12le`. Empty input keeps the source bit depth. Ignored with a warning when video is copied (`-c:v copy`).
 
 **Audio Handling**:
 - Direct copy by default
@@ -213,6 +215,7 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 
 ### Stream Mapping Logic
 - Video: Always mapped from stream 0
+- Embedded fonts (t streams): Mapped via `-map 0:t:?` in MKV output only (MP4 cannot store font attachments); `count_embedded_text_streams()` probes the video input so attached fonts get non-colliding t indices
 - Audio: Sequential mapping with first track as default
 - Subtitles: Language metadata + forced flag for "Надписи" (signs)
 - Fonts: Attached as binary streams with MIME type metadata (MKV only)
@@ -225,8 +228,8 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 
 ## Known Issues & TODOs
 
-1. **Bit depth selection**: Code exists but not fully integrated (line 418 references undefined `user_input`)
-2. **Font attachment bug**: Commented code suggests issues with additional font mapping (lines 208-210, 235-238)
+1. ~~**Bit depth selection**: Code exists but not fully integrated~~ — **Fixed (2026-08-20)**: the config loop now uses `bit_input` correctly, and `generate_ffmpeg_video_config()` maps 8/10/12 to `-pix_fmt yuv420p|yuv420p10le|yuv420p12le` instead of string-concatenating the raw input; bit depth is ignored with a warning for `-c:v copy`.
+2. ~~**Font attachment bug**~~ — **Fixed (2026-08-20)**: embedded fonts are now preserved via `-map 0:t:?` (MKV output only — MP4 does not support font attachments), and the `-metadata:s:t:N` counter for `-attach`-ed fonts is offset by the number of embedded t streams so MIME metadata lands on the right streams.
 3. **Hardcoded paths**: 
    - `append_to_file()` uses hardcoded `/data/media/anime/convertlist.txt` (line 377)
    - Comment suggests Windows path alternative (line 376)
@@ -254,6 +257,5 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 Not specified (likely personal/private tool)
 
 ---
-*Last Updated: 2026-04-16*
-*Project Root: M:/ffconverter*
+*Last Updated: 2026-08-20*
 *Primary Language: Python 3*

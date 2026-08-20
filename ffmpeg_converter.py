@@ -147,28 +147,60 @@ def format_timings(input_str):
 
     return f"-ss {formatted_timings[0]} -to {formatted_timings[1]}"
 
+def count_embedded_text_streams(video_path):
+    # Количество встроенных t-стримов (шрифтов) в видео-входе. 0, если нет.
+    if not video_path or not os.path.exists(video_path):
+        return 0
+    try:
+        return len(create_ffmpeg_config.run_ffprobe(video_path, "t"))
+    except Exception:
+        return 0
+
 def generate_ffmpeg_command(audio_sub_streams, params, index, sp):
-    mapping, metadata = generate_ffmpeg_mapping_and_meta(audio_sub_streams)
+    input_files = generate_ffmpeg_input_files(audio_sub_streams, params, index, sp)
+    video_path = None
+    for k in range(len(input_files) - 1):
+        if input_files[k] == "-i":
+            video_path = input_files[k + 1]
+            break
+    is_mkv = params.output_ext == ".mkv"
+    # Встроенные шрифты (t-стримы) мапятся только в MKV; прикреплённые через
+    # -attach получают t-индекс со сдвигом на их количество.
+    t_offset = count_embedded_text_streams(video_path) if is_mkv else 0
+    mapping, metadata = generate_ffmpeg_mapping_and_meta(audio_sub_streams, map_text=is_mkv)
     video_config = generate_ffmpeg_video_config(params.codec, params.bit)
     audio_config = generate_ffmpeg_audio_config(audio_sub_streams, params.flac_convert)
-    input_files = generate_ffmpeg_input_files(audio_sub_streams, params, index, sp)
-    sub_fonts = generate_ffmpeg_sub_fonts(audio_sub_streams, params.output_ext)
+    sub_fonts = generate_ffmpeg_sub_fonts(audio_sub_streams, params.output_ext, t_offset=t_offset)
     output_file = generate_ffmpeg_output_files(params, index, sp)
     tune_config = generate_ffmpeg_tune_config(params.crf, params.tune_preset)
     command = ["ffmpeg", "-analyzeduration", "100M", "-probesize", "100M", *input_files, params.cut_time, *mapping, *video_config.split(), *audio_config, *sub_fonts, "-c:s", "copy", "-aq-mode", "3", "-max_interleave_delta", "0", *metadata, *tune_config, "-preset", "slow", "-threads", "0", "-row-mt", "1", "-x265-params", "asm=avx512", output_file, "-y"]
     command = [arg for arg in command if arg != '']
     return command
     
+PIX_FMT_BY_BIT = {
+    8: "yuv420p",
+    10: "yuv420p10le",
+    12: "yuv420p12le",
+}
+
 def generate_ffmpeg_video_config(codec, bit):
-    #ToDo Сделать биты
+    # Бит-глубина 8/10/12 → -pix_fmt; пусто/None → как у оригинала
+    pix_fmt_args = ""
+    if bit not in (None, ""):
+        pix_fmt = PIX_FMT_BY_BIT.get(int(bit))
+        if pix_fmt:
+            pix_fmt_args = f" -pix_fmt {pix_fmt}"
     if not codec:
-        return "-c:v copy" + bit
+        if pix_fmt_args:
+            print("Внимание: бит-глубина игнорируется при копировании видео (-c:v copy)")
+        return "-c:v copy"
     if codec == "hevc":
-        return "-c:v libx265 -vtag hvc1" + bit
+        return f"-c:v libx265 -vtag hvc1{pix_fmt_args}"
     if codec == "av1(Его нет)":
-        return "-c:v libaom-av1" + bit
+        return f"-c:v libaom-av1{pix_fmt_args}"
     if codec == "h264":
-        return "-c:v libx264" + bit
+        return f"-c:v libx264{pix_fmt_args}"
+    return "-c:v copy"
 
 def generate_ffmpeg_tune_config(crf, tune):
     tune_config = []
@@ -199,15 +231,18 @@ def generate_ffmpeg_audio_config(audio_sub_streams, flac_convert):
         audio_config.append("copy")
     return audio_config
         
-def generate_ffmpeg_mapping_and_meta(audio_sub_streams):
+def generate_ffmpeg_mapping_and_meta(audio_sub_streams, map_text=False):
     mapping = []
     meta = []
     audio_count = 0
     mapping.append("-map") 
     mapping.append("0:v")
-    #Тут баг с доп шрифтами
-    # mapping.append("-map") 
-    # mapping.append("0:t:?")
+    if map_text:
+        # Сохраняем встроенные в видео шрифты (t-стримы), чтобы сабы
+        # находили свои шрифты в выходном файле. Только MKV — mp4
+        # вложения не поддерживает.
+        mapping.append("-map") 
+        mapping.append("0:t:?")
     for i, stream in enumerate(audio_sub_streams):
         if stream.type == "a":
             if i == 0:
@@ -232,27 +267,25 @@ def generate_ffmpeg_mapping_and_meta(audio_sub_streams):
                 meta.append("0")                                
         mapping.append("-map") 
         mapping.append(f"{stream.stream}:{stream.type}:{stream.index}")
-        #Тут баг с доп шрифтами
-        # if stream.stream >= 1:
-            # mapping.append("-map") 
-            # mapping.append(f"{stream.stream}:t:?")
         meta.append(f"-metadata:s:{stream.type}:{index}")
         meta.append(f"language={stream.lang}")
         meta.append(f"-metadata:s:{stream.type}:{index}")
         meta.append(f'title={stream.title}')
     return mapping, meta
     
-def generate_ffmpeg_sub_fonts(audio_sub_streams, output_ext):
+def generate_ffmpeg_sub_fonts(audio_sub_streams, output_ext, t_offset=0):
     sub_fonts = []
     if output_ext == ".mkv":
+        # t_offset = количество встроенных шрифтов, мапнутых через 0:t:?
+        # Они занимают t-индексы t:0..t:(t_offset-1), поэтому прикреплённые
+        # через -attach начинаются с t_offset.
         fonts_count = 0
         for stream in audio_sub_streams:
             if stream.type == "s":
                 for font in stream.fonts:
-                    #Тут баг с доп шрифтами
                     sub_fonts.append("-attach")
                     sub_fonts.append(f"{font}")
-                    sub_fonts.append(f"-metadata:s:t:{fonts_count}")
+                    sub_fonts.append(f"-metadata:s:t:{t_offset + fonts_count}")
                     sub_fonts.append(f"mimetype=application/x-{'truetype-font' if font.lower().endswith('.ttf') else 'font-opentype'}")
                     fonts_count += 1
     return sub_fonts

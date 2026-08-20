@@ -9,3 +9,6 @@ convertlist.txt
 .venv/
 # Ignore IDE settings
 .idea/
+# Ignore Python cache
+__pycache__/
+*.pyc
