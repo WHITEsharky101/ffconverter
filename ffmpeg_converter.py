@@ -11,6 +11,9 @@ from create_ffmpeg_config import FFmpegParam
 
 SAVE_FILE = 'streams_data.pkl' 
 TUNE_LIST = ['animation', 'grain', 'film']
+# Максимальная ширина диапазона эпизодов (включительно). Защита от опечаток
+# вроде "1-10000000", которая иначе материализует миллион элементов.
+MAX_RANGE_SPAN = 10000
  
 # Функция для загрузки данных из файла, если он существует
 def load_data():
@@ -112,10 +115,27 @@ def process_string(input_string):
 
     for part in parts:
         if '-' in part:  # Диапазон чисел
-            start, end = map(int, part.split('-'))
+            pieces = part.split('-')
+            if len(pieces) != 2:
+                print(f"Внимание: некорректный диапазон \"{part}\" — пропускаю")
+                continue
+            try:
+                start, end = int(pieces[0]), int(pieces[1])
+            except ValueError:
+                print(f"Внимание: некорректный диапазон \"{part}\" — пропускаю")
+                continue
+            if end < start:
+                print(f"Внимание: диапазон \"{part}\" задан наоборот — пропускаю")
+                continue
+            if end - start > MAX_RANGE_SPAN:
+                print(f"Внимание: диапазон \"{part}\" слишком широкий — пропускаю")
+                continue
             result.extend([f"{i:02}" for i in range(start, end + 1)])
         else:  # Одиночное число
-            result.append(f"{int(part):02}")
+            try:
+                result.append(f"{int(part):02}")
+            except ValueError:
+                print(f"Внимание: некорректное число \"{part}\" — пропускаю")
 
     return result
 
