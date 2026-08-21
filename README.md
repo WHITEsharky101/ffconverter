@@ -230,9 +230,7 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 
 1. ~~**Bit depth selection**: Code exists but not fully integrated~~ — **Fixed (2026-08-20)**: the config loop now uses `bit_input` correctly, and `generate_ffmpeg_video_config()` maps 8/10/12 to `-pix_fmt yuv420p|yuv420p10le|yuv420p12le` instead of string-concatenating the raw input; bit depth is ignored with a warning for `-c:v copy`.
 2. ~~**Font attachment bug**~~ — **Fixed (2026-08-20)**: embedded fonts are now preserved via `-map 0:t:?` (MKV output only — MP4 does not support font attachments), and the `-metadata:s:t:N` counter for `-attach`-ed fonts is offset by the number of embedded t streams so MIME metadata lands on the right streams.
-3. **Hardcoded paths**: 
-   - `append_to_file()` uses hardcoded `/data/media/anime/convertlist.txt` (line 377)
-   - Comment suggests Windows path alternative (line 376)
+3. ~~**Hardcoded paths**~~ — **Fixed (2026-08-21)**: `append_to_file()` no longer hardcodes `/data/media/anime/convertlist.txt` — the log file is now `convertlist.txt` next to the source code (`CONVERTLIST_PATH`, resolved from the module's own location), so the script works on any machine without edits.
 4. **Cleanup**: `#clean_up` placeholder suggests post-conversion processing not implemented
 5. **Archive tool path**: `rarfile.UNRAR_TOOL` commented out (line 14) - may need configuration
 6. **AV1 codec**: Listed but marked as unavailable ("Его нет" = "It doesn't exist")
