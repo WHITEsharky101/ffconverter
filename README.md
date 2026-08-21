@@ -236,6 +236,7 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 4. **Cleanup**: `#clean_up` placeholder suggests post-conversion processing not implemented
 5. **Archive tool path**: `rarfile.UNRAR_TOOL` commented out (line 14) - may need configuration
 6. **AV1 codec**: Listed but marked as unavailable ("Его нет" = "It doesn't exist")
+7. ~~**media_getter crash**~~ — **Fixed (2026-08-21)**: `media_getter()` now returns `""` for missing/empty folders instead of raising `UnboundLocalError`/`FileNotFoundError`, `ffprobe_media()` always returns a 2-tuple (the no-media branch previously returned a 3-tuple that would crash the caller's unpack), and `get_media_ext()` warns and preserves list parallelism (appends `""`) when external audio/subtitle files are missing, so positional indexing in the converter stays correct.
 
 ## Platform Notes
 - Developed on Windows (paths like `M:\anime\`)
@@ -257,5 +258,5 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 Not specified (likely personal/private tool)
 
 ---
-*Last Updated: 2026-08-20*
+*Last Updated: 2026-08-21*
 *Primary Language: Python 3*
