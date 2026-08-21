@@ -237,6 +237,7 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 5. **Archive tool path**: `rarfile.UNRAR_TOOL` commented out (line 14) - may need configuration
 6. **AV1 codec**: Listed but marked as unavailable ("Его нет" = "It doesn't exist")
 7. ~~**media_getter crash**~~ — **Fixed (2026-08-21)**: `media_getter()` now returns `""` for missing/empty folders instead of raising `UnboundLocalError`/`FileNotFoundError`, `ffprobe_media()` always returns a 2-tuple (the no-media branch previously returned a 3-tuple that would crash the caller's unpack), and `get_media_ext()` warns and preserves list parallelism (appends `""`) when external audio/subtitle files are missing, so positional indexing in the converter stays correct.
+8. ~~**Episode input crash on invalid range**~~ — **Fixed (2026-08-21)**: `process_string()` no longer raises on malformed episode input — multi-hyphen tokens (`1-2-3`), non-numeric tokens (`abc`), dangling hyphens (`5-`, `-5`) are skipped with a warning, reversed ranges (`5-1`) are skipped with a warning, and ranges wider than `MAX_RANGE_SPAN` (10000) are skipped to prevent materializing millions of elements from a typo (`1-10000000` → `MemoryError`). Valid tokens in the same input are still returned; a fully invalid input yields `[]`, same as pressing Enter.
 
 ## Platform Notes
 - Developed on Windows (paths like `M:\anime\`)
