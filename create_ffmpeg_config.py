@@ -126,7 +126,7 @@ def ffprobe_media(folder_path):
     media_file = media_getter(folder_path, (".mkv", ".mp4", ".avi", ".mov"))
     if not media_file:
         print("Нет подходящих медиафайлов для анализа.")
-        return [], [], ""   
+        return [], []
   
     file_to_probe = os.path.join(folder_path, media_file)
     audio_data = run_ffprobe(file_to_probe, "a")
