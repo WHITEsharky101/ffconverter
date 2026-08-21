@@ -337,7 +337,10 @@ def get_media_ext(video_path, audio_sub_streams):
     sub_ext = []
     if video_path:
         media_file = media_getter(video_path, (".mkv", ".mp4", ".avi", ".mov"))
-        video_ext = os.path.splitext(media_file)[1]
+        if media_file:
+            video_ext = os.path.splitext(media_file)[1]
+        else:
+            print(f"Внимание: видеофайл не найден в {video_path}")
     for i, stream in enumerate(audio_sub_streams):
         if stream.path == "/":
             path = video_path
@@ -346,10 +349,18 @@ def get_media_ext(video_path, audio_sub_streams):
               
         if stream.type == "a" and stream.path:
             media_file = media_getter(path, (".mka", ".flac", ".mp3", ".ac3", ".aac", ".m4a", ".wav", ".wmv", ".mkv", ".mp4"))
-            audio_ext.append(os.path.splitext(media_file)[1])
+            if media_file:
+                audio_ext.append(os.path.splitext(media_file)[1])
+            else:
+                print(f"Внимание: аудиофайл не найден в {path}")
+                audio_ext.append("")
         if stream.type == "s" and stream.path:
             media_file = media_getter(path, (".srt", ".ass", "sub"))
-            sub_ext.append(os.path.splitext(media_file)[1])
+            if media_file:
+                sub_ext.append(os.path.splitext(media_file)[1])
+            else:
+                print(f"Внимание: субтитры не найдены в {path}")
+                sub_ext.append("")
     return video_ext, audio_ext, sub_ext
     
 def media_getter(path, exts):
