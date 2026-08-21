@@ -14,6 +14,8 @@ TUNE_LIST = ['animation', 'grain', 'film']
 # Максимальная ширина диапазона эпизодов (включительно). Защита от опечаток
 # вроде "1-10000000", которая иначе материализует миллион элементов.
 MAX_RANGE_SPAN = 10000
+# Файл журнала конвертаций — рядом с исходным кодом
+CONVERTLIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'convertlist.txt')
  
 # Функция для загрузки данных из файла, если он существует
 def load_data():
@@ -425,9 +427,8 @@ def format_time(seconds):
     return f"{hours:02}:{minutes:02}:{seconds:02}" 
 
 def append_to_file(text):
-    #Доделать путь на оба устройства
     #file_path = 'M:\\anime\\convertlist.txt'
-    file_path = '/data/media/anime/convertlist.txt'
+    file_path = CONVERTLIST_PATH
     try:
         with open(file_path, 'a', encoding='utf-8') as file:
             file.write(text + '\n')
