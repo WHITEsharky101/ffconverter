@@ -353,11 +353,12 @@ def get_media_ext(video_path, audio_sub_streams):
     return video_ext, audio_ext, sub_ext
     
 def media_getter(path, exts):
+    if not os.path.isdir(path):
+        return ""
     for f in os.listdir(path):
         if f.endswith(exts):
-            media_file = f
-            break  
-    return media_file    
+            return f
+    return ""
 
 # Функция для сохранения данных в файл
 def save_data(data):
