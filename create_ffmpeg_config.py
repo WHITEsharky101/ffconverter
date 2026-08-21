@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import zipfile
 import rarfile
@@ -133,9 +134,77 @@ def ffprobe_media(folder_path):
     subtitle_data = run_ffprobe(file_to_probe, "s")
     return audio_data, subtitle_data         
 
+# Season subfolder looks like "<name> S01", "<name> S01 [tags]".
+SEASON_FOLDER_RE = re.compile(r" S\d{1,3}(\s|\[|$)")
+
+
+def _has_season_folder(path):
+    try:
+        return any(SEASON_FOLDER_RE.search(d) for d in os.listdir(path))
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        return False
+
+
+def find_media_candidates(query, base="."):
+    """Return media folder names in base containing query (case-insensitive).
+
+    A directory counts as media only if it has a season subfolder
+    ("Name SNN"), so junk dirs are excluded. Unreadable base -> [].
+    """
+    q = query.lower()
+    try:
+        entries = os.listdir(base)
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        return []
+    candidates = [
+        d
+        for d in entries
+        if q in d.lower() and os.path.isdir(os.path.join(base, d))
+        and _has_season_folder(os.path.join(base, d))
+    ]
+    return sorted(candidates, key=str.lower)
+
+
+def select_media_name(query, base="."):
+    """Resolve a media name from search results.
+
+    Exact (case-insensitive) or single match -> returned directly.
+    Several matches -> numbered list, user picks a number.
+    No match -> None.
+    """
+    candidates = find_media_candidates(query, base)
+    if not candidates:
+        return None
+    for c in candidates:
+        if c.lower() == query.lower():
+            return c
+    if len(candidates) == 1:
+        return candidates[0]
+    print(f"\nНайдено несколько совпадений для '{query}':")
+    for i, folder in enumerate(candidates, 1):
+        print(f"{i}: {folder}")
+    while True:
+        try:
+            choice = int(input("Выберите медиа: "))
+            if 1 <= choice <= len(candidates):
+                return candidates[choice - 1]
+        except ValueError:
+            pass
+        print("Неверный ввод, попробуйте снова.")
+
+
 def prompt_user_for_media():
     while True:
         name = input("Введите название медиа: ")
+        selected = select_media_name(name)
+        if selected is None:
+            print(f"Ничего не найдено по запросу '{name}'. Попробуйте ещё раз.")
+            continue
+        if selected != name:
+            print(f"Выбрано: {selected}")
+        name = selected
+        break
+    while True:
         season = input("Введите номер сезона: (по умолчанию 1): ") or "1"
         formatted_season = season.zfill(2)
 

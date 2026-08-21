@@ -46,8 +46,10 @@ class FindMediaCandidatesTest(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_exact_case_insensitive(self):
+        # "blue lock" is a substring of both "Blue Lock" and "Blue Lock Extra".
         self.assertEqual(
-            cfc.find_media_candidates("BLUE LOCK", self.tmp), ["Blue Lock"]
+            cfc.find_media_candidates("BLUE LOCK", self.tmp),
+            ["Blue Lock", "Blue Lock Extra"],
         )
 
     def test_single_substring(self):
@@ -108,8 +110,8 @@ class SelectMediaNameTest(unittest.TestCase):
 
     def test_multiple_match_invalid_input_retries(self):
         inputs = iter(["abc", "0", "99", "2"])
-        with mock.patch("builtins.input", side_effect=lambda: next(inputs)):
-            self.assertEqual(cfc.select_media_name("blu", self.tmp), "Blue Archive")
+        with mock.patch("builtins.input", side_effect=lambda prompt=None: next(inputs)):
+            self.assertEqual(cfc.select_media_name("blu", self.tmp), "Blue Lock")
 
     def test_zero_match_returns_none(self):
         with mock.patch("builtins.input", side_effect=AssertionError("no prompt")):
@@ -129,8 +131,12 @@ class PromptUserForMediaTest(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_zero_match_reprompts_then_resolves(self):
+        # The script assumes CWD = media root; run the search in the temp dir.
+        old_cwd = os.getcwd()
+        self.addCleanup(os.chdir, old_cwd)
+        os.chdir(self.tmp)
         inputs = iter(["zzz", "blu", "4", "1"])
-        with mock.patch("builtins.input", side_effect=lambda: next(inputs)), \
+        with mock.patch("builtins.input", side_effect=lambda prompt=None: next(inputs)), \
                 mock.patch.object(
                     cfc,
                     "find_media_folder",
