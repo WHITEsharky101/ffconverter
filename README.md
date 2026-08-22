@@ -10,6 +10,8 @@ FFConverter is an automated video/audio conversion tool built on FFmpeg, specifi
 - **External Stream Support**: Ability to add external audio and subtitle files
 - **Font Attachment**: Automatically discovers and attaches fonts from ZIP/RAR archives for ASS subtitles; embedded (attached-in-source) fonts are preserved in MKV output
 - **Flexible Encoding Options**: Support for HEVC (libx265), H264 (libx264), and copy modes, with 8/10/12-bit depth selection
+- **Current Video Codec Display**: The codec selection prompt shows the source's current video codec (e.g. `Текущий видеокодек: hevc`)
+- **FLAC Conversion Gate**: The "convert FLAC to AAC?" question is only asked when a FLAC audio track actually exists (embedded `flac` codec or external `.flac` file); otherwise conversion is skipped automatically
 - **Batch Processing**: Convert multiple episodes with configurable ranges
 - **Special Episode Handling**: Proper handling of season "00" for OVAs and specials
 - **Conversion Logging**: Persistent log of all conversions with timing information

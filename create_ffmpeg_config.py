@@ -132,7 +132,45 @@ def ffprobe_media(folder_path):
     file_to_probe = os.path.join(folder_path, media_file)
     audio_data = run_ffprobe(file_to_probe, "a")
     subtitle_data = run_ffprobe(file_to_probe, "s")
-    return audio_data, subtitle_data         
+    return audio_data, subtitle_data
+
+def get_video_codec(folder_path):
+    """Codec name of the first video stream in the first video file, or ""."""
+    media_file = media_getter(folder_path, (".mkv", ".mp4", ".avi", ".mov"))
+    if not media_file:
+        return ""
+    streams = run_ffprobe(os.path.join(folder_path, media_file), "v")
+    if streams:
+        return streams[0].get("codec_name") or ""
+    return ""
+
+def has_flac_audio(folder_path, audio_streams):
+    """True if any audio track is FLAC.
+
+    Embedded tracks (no path) are checked by codec_name from ffprobe;
+    external tracks by .flac extension in their folder (same resolution
+    rule as get_media_ext).
+    """
+    for stream in audio_streams:
+        if stream.type != "a":
+            continue
+        if not stream.path:
+            if (stream.codec or "").lower() == "flac":
+                return True
+            continue
+        if stream.path == "/":
+            path = folder_path
+        else:
+            path = os.path.join(folder_path, stream.path)
+        if not os.path.isdir(path):
+            continue
+        try:
+            for f in os.listdir(path):
+                if f.lower().endswith(".flac"):
+                    return True
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
+            continue
+    return False 
 
 # Season subfolder looks like "<name> S01", "<name> S01 [tags]".
 SEASON_FOLDER_RE = re.compile(r" S\d{1,3}(\s|\[|$)")
@@ -479,6 +517,8 @@ def main():
     
     video_ext, audio_ext, sub_ext = get_media_ext(folder_to_probe, audio_sub_streams)
     
+    current_video_codec = get_video_codec(folder_to_probe)
+    print(f"\nТекущий видеокодек: {current_video_codec or 'не определен'}")
     while True:
         print()
         for i, codec in enumerate(CODECS):
@@ -504,16 +544,20 @@ def main():
             print("Неверный ввод")
    
     output_ext = input("\nВведите формат выходного файла (По умолчанию как у оригинала): ")
-    while True:
-        user_input = input("\nКонвертировать flac в acc?(y/n): ").strip().lower()
-        if user_input == "y" or user_input == "н":
-            flac_convert = True
-            break
-        elif user_input == "n" or user_input == "т":
-            flac_convert = False
-            break
-        else:
-            print("Неверный ввод")
+    if has_flac_audio(folder_to_probe, audio_sub_streams):
+        while True:
+            user_input = input("\nКонвертировать flac в acc?(y/n): ").strip().lower()
+            if user_input == "y" or user_input == "н":
+                flac_convert = True
+                break
+            elif user_input == "n" or user_input == "т":
+                flac_convert = False
+                break
+            else:
+                print("Неверный ввод")
+    else:
+        print("FLAC-дорожек не найдено — конвертация в AAC не требуется.")
+        flac_convert = False
     
     data = {"streams": [], "params": []} 
     data["streams"] = audio_sub_streams
