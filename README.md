@@ -116,11 +116,12 @@ Examples:
 
 ### Output Pattern
 ```
-{Show Name} S{Season}E{Episode} [{CODEC}]{ext}
+{Show Name} S{Season}E{Episode} [{CODEC}]{ext}   # re-encode to HEVC or AV1
+{Show Name} S{Season}E{Episode}{ext}             # H264 or codec copy (no brackets)
 ```
 Examples:
 - `Uchuu Senkan Yamato 2199 S01E03 [HEVC].mkv`
-- `Log Horizon S02E01 [H264].mp4`
+- `Log Horizon S02E01.mp4` (H264 or copy — no bracket tag)
 
 ### Special Episodes
 Season "00" indicates special episodes (OVAs, movies, etc.):
@@ -240,10 +241,14 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 6. **AV1 codec**: Listed but marked as unavailable ("Его нет" = "It doesn't exist")
 7. ~~**media_getter crash**~~ — **Fixed (2026-08-21)**: `media_getter()` now returns `""` for missing/empty folders instead of raising `UnboundLocalError`/`FileNotFoundError`, `ffprobe_media()` always returns a 2-tuple (the no-media branch previously returned a 3-tuple that would crash the caller's unpack), and `get_media_ext()` warns and preserves list parallelism (appends `""`) when external audio/subtitle files are missing, so positional indexing in the converter stays correct.
 8. ~~**Episode input crash on invalid range**~~ — **Fixed (2026-08-21)**: `process_string()` no longer raises on malformed episode input — multi-hyphen tokens (`1-2-3`), non-numeric tokens (`abc`), dangling hyphens (`5-`, `-5`) are skipped with a warning, reversed ranges (`5-1`) are skipped with a warning, and ranges wider than `MAX_RANGE_SPAN` (10000) are skipped to prevent materializing millions of elements from a typo (`1-10000000` → `MemoryError`). Valid tokens in the same input are still returned; a fully invalid input yields `[]`, same as pressing Enter.
+9. ~~**Orphaned `-tune` broke encodes with a skipped preset**~~ — **Fixed (2026-08-22)**: `generate_ffmpeg_tune_config()` always emitted `-tune <empty>`; the empty-arg filter in `generate_ffmpeg_command()` then left a dangling `-tune` that consumed the `-crf` value, so ffmpeg failed with `Error opening output file 18` on every encode where the preset question was answered with an empty line. `-tune` is now appended only when a tune value is present.
+10. ~~**Output filename brackets for h264/copy**~~ — **Fixed (2026-08-22)**: per user rule, the bracket tag in the output name is the codec tag for hevc/av1 only. `codec_tag()` returns `HEVC`/`AV1`/`''`; `generate_ffmpeg_output_files()` appends ` [TAG]` only when non-empty, so h264 and codec copy produce a bare name (the old code printed `[H264]` for h264 and `[]` for copy).
+11. ~~**Special episodes (S00) not logged**~~ — **Fixed (2026-08-22)**: the `append_to_file()` call existed only in the normal episode loop. The line format is now `episode_log_line(params, season, episode, formatted_time)`, shared by both loops — the sp loop logs with season `00`, the normal loop keeps the byte-identical legacy line.
+12. ~~**`find_ttf_in_fonts` side effects**~~ — **Fixed (2026-08-22)**: the function created a `fonts/` directory in the media tree even when no font archive existed, crashed on a missing subtitle folder, and (POSIX) walked the filesystem root for a `/` subtitle path because `os.path.join(base, "/") == "/"`. Now: `""`/`/` resolves to the season dir itself, a missing search dir returns the stream untouched with no side effects, and `fonts/` is created only when a font archive is actually found.
 
 ## Platform Notes
 - Developed on Windows (paths like `M:\anime\`)
-- Linux path hardcoded in `append_to_file()`: `/data/media/anime/convertlist.txt`
+- `convertlist.txt` is resolved next to the source code (`CONVERTLIST_PATH`), not hardcoded
 - Cross-platform Python code (OS-aware path handling)
 - Requires FFmpeg in system PATH
 
@@ -261,5 +266,5 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 Not specified (likely personal/private tool)
 
 ---
-*Last Updated: 2026-08-21*
+*Last Updated: 2026-08-22*
 *Primary Language: Python 3*
