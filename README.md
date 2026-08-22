@@ -6,6 +6,7 @@ FFConverter is an automated video/audio conversion tool built on FFmpeg, specifi
 
 - **Interactive Configuration Wizard**: Step-by-step setup for conversion parameters and stream mappings
 - **Media Name Search**: Type a full name or any substring (case-insensitive); a single or exact match proceeds directly, multiple matches show a numbered list, no match asks you to try again
+- **Season Selection List**: Season choice shows a numbered list of the available season folders with whatever the folder name has in its brackets (e.g. `1: S01 [Anidub, AniLibria]`, `2: S02 [Sub]`); folders without brackets are shown bare (`3: S03`); if no season folders match, the old free-form season input is kept
 - **Intelligent Stream Mapping**: Automatic detection and selection of embedded audio/subtitle tracks
 - **External Stream Support**: Ability to add external audio and subtitle files
 - **Font Attachment**: Automatically discovers and attaches fonts from ZIP/RAR archives for ASS subtitles; embedded (attached-in-source) fonts are preserved in MKV output

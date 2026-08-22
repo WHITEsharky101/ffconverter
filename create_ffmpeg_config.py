@@ -231,6 +231,43 @@ def select_media_name(query, base="."):
         print("Неверный ввод, попробуйте снова.")
 
 
+def _parse_season_note(folder):
+    """Content of the first [...] pair in a season folder name, verbatim.
+
+    No splitting, no filtering — the bracket content is shown as-is.
+    Returns "" when the folder name has no brackets.
+    """
+    m = re.search(r"\[([^\]]*)\]", folder)
+    return m.group(1).strip() if m else ""
+
+
+def list_seasons(base_path, name):
+    """Available season numbers under base_path for a media name.
+
+    Returns [(digits, note), ...] sorted by season number, where note is
+    the first [...] content of a matching "<name> SNN" folder name,
+    verbatim ("" when the folder has no brackets). Unreadable base -> [].
+    """
+    pattern = re.compile(re.escape(name) + r"\s+S(\d{1,3})(?=\s|\[|$)")
+    seasons = {}
+    try:
+        entries = os.listdir(base_path)
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        return []
+    for d in sorted(entries):
+        if not os.path.isdir(os.path.join(base_path, d)):
+            continue
+        m = pattern.match(d)
+        if not m:
+            continue
+        digits = m.group(1)
+        if digits not in seasons:
+            seasons[digits] = _parse_season_note(d)
+        elif not seasons[digits]:
+            seasons[digits] = _parse_season_note(d)
+    return [(digits, seasons[digits]) for digits in sorted(seasons, key=int)]
+
+
 def prompt_user_for_media():
     while True:
         name = input("Введите название медиа: ")
@@ -242,11 +279,30 @@ def prompt_user_for_media():
             print(f"Выбрано: {selected}")
         name = selected
         break
+    base_path = f"{name}/"
     while True:
-        season = input("Введите номер сезона: (по умолчанию 1): ") or "1"
-        formatted_season = season.zfill(2)
+        formatted_season = None
+        seasons = list_seasons(base_path, name)
+        if seasons:
+            print(f"\nДоступные сезоны:")
+            for i, (digits, note) in enumerate(seasons, 1):
+                label = f"S{digits}"
+                if note:
+                    label += f" [{note}]"
+                print(f"{i}: {label}")
+            while True:
+                try:
+                    choice = int(input("Выберите сезон: ") or "1")
+                    if 1 <= choice <= len(seasons):
+                        formatted_season = seasons[choice - 1][0]
+                        break
+                except ValueError:
+                    pass
+                print("Неверный ввод, попробуйте снова.")
+        else:
+            season = input("Введите номер сезона: (по умолчанию 1): ") or "1"
+            formatted_season = season.zfill(2)
 
-        base_path = f"{name}/"
         media_folder, audio_tags = find_media_folder(base_path, name, formatted_season)
         if media_folder:
             return base_path, media_folder, audio_tags, name, formatted_season
