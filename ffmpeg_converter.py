@@ -412,12 +412,29 @@ def generate_ffmpeg_input_files(audio_sub_streams, params, index, sp):
 
 
     
+def codec_tag(codec):
+    """Bracket tag for the output filename, or '' when no tag is wanted.
+
+    User rule: brackets carry the codec only for hevc ('HEVC') and av1
+    ('AV1'); h264 and codec copy produce a bare name.
+    """
+    if not codec:
+        return ""
+    if codec.lower() == "hevc":
+        return "HEVC"
+    if "av1" in codec.lower():
+        return "AV1"
+    return ""
+
+
 def generate_ffmpeg_output_files(params, index, sp):
     if sp == True:
         season = "00"
     else:
         season = params.season
-    base_name = f'{params.name} S{season}E{index} [{params.codec.upper()}]{params.output_ext}'
+    tag = codec_tag(params.codec)
+    bracket = f" [{tag}]" if tag else ""
+    base_name = f'{params.name} S{season}E{index}{bracket}{params.output_ext}'
     if params.path.endswith(".tmp"):
         path = os.path.dirname(params.path)
     else:
