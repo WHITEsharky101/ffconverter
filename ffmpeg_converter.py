@@ -456,6 +456,11 @@ def append_to_file(text):
     except Exception as e:
         print(f'Ошибка при добавлении текста в файл: {e}')    
     
+def episode_log_line(params, season, episode, formatted_time):
+    """One convertlist.txt line. Shared by the normal and sp (S00) loops."""
+    return f"{params.name} S{season}E{episode} [{params.crf}][{formatted_time}]"
+
+
 def main():
     audio_sub_streams, pre_params = load_data()
     params = collect_inputs(audio_sub_streams, pre_params)
@@ -481,6 +486,7 @@ def main():
         else:
             elapsed_time = end_time - start_time
             formatted_time = format_time(elapsed_time)
+        append_to_file(episode_log_line(params, "00", episode, formatted_time))
         #clean_up
     for episode in params.episodes: 
         ffmpeg_command = generate_ffmpeg_command(audio_sub_streams, params, episode, False)
@@ -505,7 +511,7 @@ def main():
             formatted_time = format_time(elapsed_time)
         #clean_up
 
-        append_to_file(f'{params.name} S{params.season}E{episode} [{params.crf}][{formatted_time}]')
+        append_to_file(episode_log_line(params, params.season, episode, formatted_time))
     
     append_to_file("===============================")
     
