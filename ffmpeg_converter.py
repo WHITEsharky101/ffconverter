@@ -229,8 +229,12 @@ def generate_ffmpeg_tune_config(crf, tune):
     if not crf:
         return tune_config
     else:
-        tune_config.append('-tune')
-        tune_config.append(f'{tune}')
+        if tune:
+            # Пустой tune (пресет пропущен) не должен давать сиротский
+            # -tune: после фильтрации пустых аргументов он съедает значение
+            # -crf, и ffmpeg ломается ("Error opening output file 18").
+            tune_config.append('-tune')
+            tune_config.append(f'{tune}')
         tune_config.append('-crf')
         tune_config.append(f'{crf}')
     return tune_config
