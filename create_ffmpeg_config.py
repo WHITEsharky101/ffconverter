@@ -6,41 +6,15 @@ import rarfile
 import json
 import pickle
 
+from ffcore.models import AudioSubStream, FFmpegParam      # noqa: F401  (public API + pickle identity)
+from ffcore.storage import SAVE_FILE, save_data            # noqa: F401
+
 ALLOWED_EXTENSIONS = {
     ".mkv", ".mp4", ".mka", ".ass", ".srt", ".flac", ".mp3", ".ac3", ".aac",
     ".m4a", ".avi", ".wav", ".mov", ".wmv"
 }
 CODECS = ["hevc", "h264"]
-SAVE_FILE = "streams_data.pkl"
 #rarfile.UNRAR_TOOL = r"/"
-
-class AudioSubStream:
-    def __init__(self, stream, index, type, path, fonts, lang, title, codec):
-        self.stream = stream
-        self.index = index
-        self.type = type
-        self.path = path
-        self.fonts = fonts
-        self.lang = lang
-        self.title = title
-        self.codec = codec
-        
-class FFmpegParam:
-    def __init__(self, name, season, path, episodes, sp_episodes, video_ext, audio_ext, sub_ext, output_ext, flac_convert, codec, bit, tune_preset, cut_time):
-        self.name = name
-        self.season = season
-        self.path = path
-        self.episodes = episodes
-        self.sp_episodes = sp_episodes
-        self.video_ext = video_ext
-        self.audio_ext = audio_ext
-        self.sub_ext = sub_ext
-        self.output_ext = output_ext
-        self.flac_convert = flac_convert
-        self.codec = codec
-        self.bit = bit
-        self.tune_preset = tune_preset
-        self.cut_time = cut_time
 
 # Функция для поиска папки
 def find_media_folder(base_path, name, season):
@@ -547,12 +521,6 @@ def media_getter(path, exts):
             return f
     return ""
 
-# Функция для сохранения данных в файл
-def save_data(data):
-    with open(SAVE_FILE, "wb") as f:
-        pickle.dump(data, f)      
-    
-            
 def main():
     base_path, media_folder, audio_tags, name, season = prompt_user_for_media()
 
