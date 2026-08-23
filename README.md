@@ -169,6 +169,18 @@ python create_ffmpeg_config.py
 # Follow interactive prompts to configure streams
 ```
 
+The wizard searches for media folders in the current directory. If it finds
+none (for example, the source code lives one level above the library root,
+in `anime/`), it asks once for the **library root** path:
+```
+Медиа-папки в текущем каталоге не найдены.
+Введите путь к корню библиотеки (Enter — текущий каталог):
+```
+A directory without media folders is rejected with a re-prompt. The resolved
+path is stored in the pickle in absolute form, so the converter works
+regardless of the directory it is started from. `streams_data.pkl` is
+always written to the current directory.
+
 ### Run Conversion
 ```bash
 python ffmpeg_converter.py
@@ -271,6 +283,7 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 
 ## Platform Notes
 - Developed on Windows (paths like `M:\anime\`)
+- Media search starts in the current directory; when it is empty of media folders the wizard prompts for the library root (see Usage)
 - `convertlist.txt` is resolved next to the source code (`CONVERTLIST_PATH`), not hardcoded
 - Cross-platform Python code (OS-aware path handling)
 - Requires FFmpeg in system PATH

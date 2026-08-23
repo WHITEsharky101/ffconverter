@@ -153,6 +153,49 @@ class PromptUserForMediaTest(unittest.TestCase):
         self.assertEqual(m.call_count, 1)
         self.assertEqual(m.call_args_list[0].args, ("Blue Period/", "Blue Period", "01"))
 
+    def test_run_from_foreign_dir_prompts_for_library_root(self):
+        # Source code moved above the library root: CWD has no media folders,
+        # so the wizard asks for the library root first, then resolves the
+        # name inside it (absolute base_path).
+        self._outside = tempfile.TemporaryDirectory()
+        self.addCleanup(self._outside.cleanup)
+        old_cwd = os.getcwd()
+        self.addCleanup(os.chdir, old_cwd)
+        os.chdir(self._outside.name)
+        inputs = iter([self.tmp, "Blue Period", "1"])
+        with mock.patch("builtins.input", side_effect=lambda prompt=None: next(inputs)), \
+                mock.patch.object(
+                    cfc,
+                    "find_media_folder",
+                    side_effect=[("Blue Period S01", [])],
+                ):
+            base_path, media_folder, audio_tags, name, season = (
+                cfc.prompt_user_for_media()
+            )
+        self.assertEqual(name, "Blue Period")
+        self.assertEqual(base_path, os.path.join(self.tmp, "Blue Period") + "/")
+        self.assertEqual(media_folder, "Blue Period S01")
+        self.assertEqual(season, "01")
+
+    def test_run_from_foreign_dir_bad_root_reprompts(self):
+        # A root without media folders is rejected; the second attempt wins.
+        self._outside = tempfile.TemporaryDirectory()
+        self.addCleanup(self._outside.cleanup)
+        old_cwd = os.getcwd()
+        self.addCleanup(os.chdir, old_cwd)
+        os.chdir(self._outside.name)
+        inputs = iter([os.path.join(self._outside.name, "nope"), self.tmp, "archive", "1"])
+        with mock.patch("builtins.input", side_effect=lambda prompt=None: next(inputs)), \
+                mock.patch.object(
+                    cfc,
+                    "find_media_folder",
+                    side_effect=[("Blue Archive S01", [])],
+                ):
+            base_path, _, _, name, season = cfc.prompt_user_for_media()
+        self.assertEqual(name, "Blue Archive")
+        self.assertEqual(base_path, os.path.join(self.tmp, "Blue Archive") + "/")
+        self.assertEqual(season, "01")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -106,10 +106,33 @@ def select_media_name(query, base="."):
         print("Неверный ввод, попробуйте снова.")
 
 
+def prompt_library_root():
+    """Каталог, в котором искать медиа-папки.
+
+    Классическое поведение — текущий каталог (библиотека лежит там же,
+    откуда запущен скрипт). Промпт появляется только тогда, когда в
+    текущем каталоге нет ни одной медиа-папки — например, когда исходный
+    код перенесён на уровень выше корня библиотеки.
+    """
+    if find_media_candidates("", "."):
+        return "."
+    while True:
+        root = input(
+            "\nМедиа-папки в текущем каталоге не найдены.\n"
+            "Введите путь к корню библиотеки (Enter — текущий каталог): "
+        ).strip()
+        if not root:
+            return "."
+        if find_media_candidates("", root):
+            return root
+        print(f"В каталоге '{root}' нет медиа-папок. Попробуйте ещё раз.")
+
+
 def prompt_user_for_media():
+    base = prompt_library_root()
     while True:
         name = input("Введите название медиа: ")
-        selected = select_media_name(name)
+        selected = select_media_name(name, base)
         if selected is None:
             print(f"Ничего не найдено по запросу '{name}'. Попробуйте ещё раз.")
             continue
@@ -117,7 +140,7 @@ def prompt_user_for_media():
             print(f"Выбрано: {selected}")
         name = selected
         break
-    base_path = f"{name}/"
+    base_path = f"{name}/" if base == "." else os.path.join(base, name) + "/"
     while True:
         formatted_season = None
         seasons = list_seasons(base_path, name)
