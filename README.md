@@ -22,21 +22,42 @@ FFConverter is an automated video/audio conversion tool built on FFmpeg, specifi
 
 ```
 ffconverter/
-├── create_ffmpeg_config.py    # Configuration and stream mapping module
-├── ffmpeg_converter.py        # Main conversion execution module
+├── create_ffmpeg_config.py    # CLI layer: config wizard (prompts + main())
+├── ffmpeg_converter.py        # CLI layer: episode selection, conversion run, logging, main()
+├── ffcore/                    # Core package: pure (non-interactive) logic
+│   ├── models.py              # AudioSubStream, FFmpegParam (dataclass, pickle identity)
+│   ├── storage.py             # streams_data.pkl load/save (+ legacy __main__ compat)
+│   ├── media.py               # season / media-folder search (list_seasons, ...)
+│   ├── ffprobe.py             # ffprobe wrappers
+│   ├── files.py               # extension rules, media_getter, get_media_ext
+│   ├── fonts.py               # font archives (zip/rar) + ttf discovery
+│   ├── ffmpeg.py              # all generate_ffmpeg_* command builders, codec_tag
+│   ├── text.py                # process_string, format_timings, format_time
+│   └── prompting.py           # ask_index() — the single shared input() helper
 ├── convertlist.txt            # Conversion log with episode timings
 ├── streams_data.pkl           # Pickle file storing configuration cache
 ├── .idea/                     # IntelliJ IDEA project files
 └── project_info/              # Project documentation directory
 ```
 
+### Two-layer design
+
+- **CLI layer** (`create_ffmpeg_config.py`, `ffmpeg_converter.py`): owns `main()`,
+  all interactive `input()` calls and their exact prompts, and re-exports the
+  public names (`AudioSubStream`, `FFmpegParam`, `process_string`, …) so the
+  existing test contract and pickle file identity are preserved.
+- **Core** (`ffcore/`): all pure logic — data model, storage, media search,
+  ffprobe wrappers, ffmpeg command construction, and text parsing. Nothing in
+  `ffcore` calls `input()` except the single sanctioned helper
+  `ffcore.prompting.ask_index`, which both CLIs share.
+
 ## Core Components
 
-### 1. create_ffmpeg_config.py
+### 1. create_ffmpeg_config.py (CLI layer)
 
-**Purpose**: Interactive configuration wizard for setting up conversion parameters and stream mappings.
+**Purpose**: Interactive configuration wizard for setting up conversion parameters and stream mappings. Pure logic lives in `ffcore/` (see `ffcore/` module map); this script holds the prompts and `main()`.
 
-**Key Classes**:
+**Key Classes** (defined in `ffcore/models.py`, re-exported here):
 - `AudioSubStream`: Represents audio or subtitle streams with metadata (stream index, type, path, fonts, language, title, codec)
 - `FFmpegParam`: Stores conversion parameters (name, season, paths, extensions, codec settings, etc.)
 
@@ -44,13 +65,13 @@ ffconverter/
 - `main()`: Primary interactive configuration flow
 - `prompt_user_for_media()`: Collects show name and season number
 - `find_media_folder()`: Locates media folder with pattern matching
-- `ffprobe_media()`: Analyzes media files using ffprobe to detect embedded streams
 - `prompt_streams()`: Interactive selection of embedded audio/subtitle tracks
 - `collect_additional_streams()`: Collects external audio/subtitle file paths
-- `find_ttf_in_fonts()`: Discovers and extracts font archives (ZIP/RAR) for subtitle attachment
 - `display_streams()`: Shows configured stream order
 - `change_mapping()`: Allows reordering of audio/subtitle streams
-- `save_data()`: Serializes configuration to `streams_data.pkl`
+- `save_data()`: Serializes configuration to `streams_data.pkl` (re-export of `ffcore.storage.save_data`)
+
+**Core helpers re-exported for compatibility** (defined in `ffcore/`): `ffprobe_media`, `get_video_codec`, `has_flac_audio`, `list_seasons`, `find_media_candidates`, `find_ttf_in_fonts`, `get_media_ext`, `media_getter`, `extract_archive`, `find_fonts_in_directory`, `run_ffprobe`.
 
 **Supported Media Types**:
 - Video: MKV, MP4, AVI, MOV
@@ -58,17 +79,18 @@ ffconverter/
 - Subtitles: SRT, ASS, SUB
 - Fonts: TTF, OTF (embedded from ZIP/RAR archives)
 
-### 2. ffmpeg_converter.py
+### 2. ffmpeg_converter.py (CLI layer)
 
-**Purpose**: Executes FFmpeg conversion commands based on saved configuration.
+**Purpose**: Executes FFmpeg conversion commands based on saved configuration. Pure command construction lives in `ffcore/ffmpeg.py`; episode-range/timing parsing in `ffcore/text.py`; this script holds `main()`, `load_data()`, `collect_inputs()`, the conversion loop (`run_episode()`) and `convertlist.txt` logging.
 
 **Main Functions**:
 - `main()`: Primary conversion loop
 - `load_data()`: Loads configuration from pickle file (with user confirmation)
 - `collect_inputs()`: Collects episode numbers and conversion options
-- `process_string()`: Parses episode range input (e.g., "1-5 7 9")
-- `format_timings()`: Formats cut/trim timings for FFmpeg
-- `generate_ffmpeg_command()`: Assembles complete FFmpeg command
+- `run_episode()`: Runs one ffmpeg conversion (shared by normal and sp loops)
+- `process_string()`: Parses episode range input (e.g., "1-5 7 9") — re-export of `ffcore.text.process_string`
+- `format_timings()`: Formats cut/trim timings for FFmpeg — re-export of `ffcore.text.format_timings`
+- `generate_ffmpeg_command()`: Assembles complete FFmpeg command (re-export of `ffcore.ffmpeg`)
 - `generate_ffmpeg_mapping_and_meta()`: Creates stream mapping and metadata
 - `generate_ffmpeg_video_config()`: Configures video codec (copy/hevc/h264/av1)
 - `generate_ffmpeg_audio_config()`: Configures audio codec (copy/libfdk_aac)
@@ -217,6 +239,7 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 - Configuration stored in `streams_data.pkl` using Python pickle
 - Contains `AudioSubStream` objects list and `FFmpegParam` object
 - Allows resuming conversion sessions without reconfiguration
+- **Legacy pickle compatibility**: pre-refactor pickles recorded the model classes under `__main__` (the scripts ran as `__main__`). `ffcore/storage.py` registers the `ffcore.models` classes under both module names at import time, so old `streams_data.pkl` files keep loading without migration.
 
 ### Stream Mapping Logic
 - Video: Always mapped from stream 0
@@ -266,5 +289,5 @@ Uchuu Senkan Yamato 2199 S01E03 [18][01:29:21]
 Not specified (likely personal/private tool)
 
 ---
-*Last Updated: 2026-08-22*
+*Last Updated: 2026-08-23*
 *Primary Language: Python 3*

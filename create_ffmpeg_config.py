@@ -1,20 +1,18 @@
 import os
-import re
-import subprocess
-import zipfile
-import rarfile
-import json
-import pickle
 
 from ffcore.models import AudioSubStream, FFmpegParam      # noqa: F401  (public API + pickle identity)
 from ffcore.storage import SAVE_FILE, save_data            # noqa: F401
+from ffcore.media import SEASON_FOLDER_RE, find_media_candidates, list_seasons, _parse_season_note  # noqa: F401
+from ffcore.ffprobe import run_ffprobe, ffprobe_media, get_video_codec, has_flac_audio  # noqa: F401
+from ffcore.files import media_getter, get_media_ext       # noqa: F401
+from ffcore.fonts import find_ttf_in_fonts                 # noqa: F401
+from ffcore.prompting import ask_index
 
 ALLOWED_EXTENSIONS = {
     ".mkv", ".mp4", ".mka", ".ass", ".srt", ".flac", ".mp3", ".ac3", ".aac",
     ".m4a", ".avi", ".wav", ".mov", ".wmv"
 }
 CODECS = ["hevc", "h264"]
-#rarfile.UNRAR_TOOL = r"/"
 
 # Функция для поиска папки
 def find_media_folder(base_path, name, season):
@@ -80,103 +78,6 @@ def list_folders(path):
     for folder, file_count in final_folders:
         print(f"       └─ {folder} [{file_count}]")
 
-def run_ffprobe(file_to_probe, type):
-    command = [
-        "ffprobe", "-v", "error", "-select_streams", type, "-show_entries",
-        "stream=index,codec_name:stream_tags=language,title", "-of", "json", file_to_probe
-    ]
-    
-    try:
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
-        if result.returncode != 0:
-            print(f"Ошибка ffprobe: {result.stderr.strip()}")
-            return []
-        return json.loads(result.stdout).get("streams", [])
-    except json.JSONDecodeError as e:
-        print(f"Ошибка обработки JSON: {e}")
-        return []
-        
-# Функция для выполнения ffprobe
-def ffprobe_media(folder_path):
-    media_file = media_getter(folder_path, (".mkv", ".mp4", ".avi", ".mov"))
-    if not media_file:
-        print("Нет подходящих медиафайлов для анализа.")
-        return [], []
-  
-    file_to_probe = os.path.join(folder_path, media_file)
-    audio_data = run_ffprobe(file_to_probe, "a")
-    subtitle_data = run_ffprobe(file_to_probe, "s")
-    return audio_data, subtitle_data
-
-def get_video_codec(folder_path):
-    """Codec name of the first video stream in the first video file, or ""."""
-    media_file = media_getter(folder_path, (".mkv", ".mp4", ".avi", ".mov"))
-    if not media_file:
-        return ""
-    streams = run_ffprobe(os.path.join(folder_path, media_file), "v")
-    if streams:
-        return streams[0].get("codec_name") or ""
-    return ""
-
-def has_flac_audio(folder_path, audio_streams):
-    """True if any audio track is FLAC.
-
-    Embedded tracks (no path) are checked by codec_name from ffprobe;
-    external tracks by .flac extension in their folder (same resolution
-    rule as get_media_ext).
-    """
-    for stream in audio_streams:
-        if stream.type != "a":
-            continue
-        if not stream.path:
-            if (stream.codec or "").lower() == "flac":
-                return True
-            continue
-        if stream.path == "/":
-            path = folder_path
-        else:
-            path = os.path.join(folder_path, stream.path)
-        if not os.path.isdir(path):
-            continue
-        try:
-            for f in os.listdir(path):
-                if f.lower().endswith(".flac"):
-                    return True
-        except (FileNotFoundError, NotADirectoryError, PermissionError):
-            continue
-    return False 
-
-# Season subfolder looks like "<name> S01", "<name> S01 [tags]".
-SEASON_FOLDER_RE = re.compile(r" S\d{1,3}(\s|\[|$)")
-
-
-def _has_season_folder(path):
-    try:
-        return any(SEASON_FOLDER_RE.search(d) for d in os.listdir(path))
-    except (FileNotFoundError, NotADirectoryError, PermissionError):
-        return False
-
-
-def find_media_candidates(query, base="."):
-    """Return media folder names in base containing query (case-insensitive).
-
-    A directory counts as media only if it has a season subfolder
-    ("Name SNN"), so junk dirs are excluded. Unreadable base -> [].
-    """
-    q = query.lower()
-    try:
-        entries = os.listdir(base)
-    except (FileNotFoundError, NotADirectoryError, PermissionError):
-        return []
-    candidates = [
-        d
-        for d in entries
-        if q in d.lower() and os.path.isdir(os.path.join(base, d))
-        and _has_season_folder(os.path.join(base, d))
-    ]
-    return sorted(candidates, key=str.lower)
-
-
 def select_media_name(query, base="."):
     """Resolve a media name from search results.
 
@@ -203,43 +104,6 @@ def select_media_name(query, base="."):
         except ValueError:
             pass
         print("Неверный ввод, попробуйте снова.")
-
-
-def _parse_season_note(folder):
-    """Content of the first [...] pair in a season folder name, verbatim.
-
-    No splitting, no filtering — the bracket content is shown as-is.
-    Returns "" when the folder name has no brackets.
-    """
-    m = re.search(r"\[([^\]]*)\]", folder)
-    return m.group(1).strip() if m else ""
-
-
-def list_seasons(base_path, name):
-    """Available season numbers under base_path for a media name.
-
-    Returns [(digits, note), ...] sorted by season number, where note is
-    the first [...] content of a matching "<name> SNN" folder name,
-    verbatim ("" when the folder has no brackets). Unreadable base -> [].
-    """
-    pattern = re.compile(re.escape(name) + r"\s+S(\d{1,3})(?=\s|\[|$)")
-    seasons = {}
-    try:
-        entries = os.listdir(base_path)
-    except (FileNotFoundError, NotADirectoryError, PermissionError):
-        return []
-    for d in sorted(entries):
-        if not os.path.isdir(os.path.join(base_path, d)):
-            continue
-        m = pattern.match(d)
-        if not m:
-            continue
-        digits = m.group(1)
-        if digits not in seasons:
-            seasons[digits] = _parse_season_note(d)
-        elif not seasons[digits]:
-            seasons[digits] = _parse_season_note(d)
-    return [(digits, seasons[digits]) for digits in sorted(seasons, key=int)]
 
 
 def prompt_user_for_media():
@@ -339,71 +203,11 @@ def create_streams(type, prev_count):
             title=title,
             codec=""
         )
-        streams.insert(i - prev_count - 1, stream)
-        i += 1  
-    return streams, i - prev_count - 1
+        streams.append(stream)
+        i += 1
+    return streams, len(streams)
     
 
-def extract_archive(archive_path, extract_to):
-    if zipfile.is_zipfile(archive_path):
-        with zipfile.ZipFile(archive_path, 'r') as archive:
-            archive.extractall(extract_to)
-    elif rarfile.is_rarfile(archive_path):
-        with rarfile.RarFile(archive_path, 'r') as archive:
-            archive.extractall(extract_to)
-
-def find_fonts_in_directory(directory):
-    fonts = []
-    for root, _, files in os.walk(directory):
-        for file in files:
-            if file.lower().endswith(('.ttf', '.otf')):
-                fonts.append(os.path.join(root, file))
-        if fonts:
-            break
-    print(fonts)
-    return fonts
-
-def find_ttf_in_fonts(path, stream):
-    # "" and "/" mean the season directory itself (same rule as
-    # get_media_ext / generate_ffmpeg_input_files). os.path.join resets
-    # on an absolute second argument, so "/" must NOT be joined blindly —
-    # it would point the search at the filesystem root.
-    if stream.path in ("", "/"):
-        search_dir = path
-    else:
-        search_dir = os.path.join(path, stream.path)
-
-    # Missing subtitle folder: return the stream untouched, no side effects.
-    if not os.path.isdir(search_dir):
-        return stream
-
-    fonts_dir = os.path.join(search_dir, 'fonts')
-
-    # Create fonts/ ONLY when a font archive is actually found.
-    for file in os.listdir(search_dir):
-        file_path = os.path.join(search_dir, file)
-        if os.path.isfile(file_path) and file.lower().startswith(('fonts', 'font')) and file.lower().endswith(('.zip', '.rar')):
-            os.makedirs(fonts_dir, exist_ok=True)
-            extract_archive(file_path, fonts_dir)
-            break
-
-    for root, dirs, files in os.walk(search_dir):
-        for dir_name in dirs:
-            if dir_name.lower() in ('fonts', 'font'):
-                target_dir = os.path.join(root, dir_name)
-
-                for sub_root, _, sub_files in os.walk(target_dir):
-                    for sub_file in sub_files:
-                        sub_file_path = os.path.join(sub_root, sub_file)
-                        if sub_file.lower().endswith(('.zip', '.rar')):
-                            extract_archive(sub_file_path, sub_root)
-
-                fonts = find_fonts_in_directory(target_dir)
-                if fonts:
-                    stream.fonts = fonts
-                    return stream
-    return stream
-    
 def adjust_sub_properties(streams):
     path_width = max(10, max((len(stream.path or "") for stream in streams), default=0))
     title_width = max(10, max((len(stream.title or "") for stream in streams), default=0))
@@ -430,13 +234,13 @@ def display_streams(audio_streams, sub_streams, audio_tags):
     for i, audio_stream in enumerate(audio_streams):
         path = audio_stream.path if audio_stream.path else "Встроенные"
         if i < len(audio_tags):
-            title_sugges = audio_tags[i]
+            title_suggestion = audio_tags[i]
         else:
             if i == len(audio_streams) - 1:
-                title_sugges = "Original"
+                title_suggestion = "Original"
             else:
-                title_sugges = ""
-        print(f"{i:<{index_width}} {(audio_stream.title or '???'):<{name_width}} {(audio_stream.lang or '???'):<{lang_width}} {path:<{path_width}}   ({title_sugges})")
+                title_suggestion = ""
+        print(f"{i:<{index_width}} {(audio_stream.title or '???'):<{name_width}} {(audio_stream.lang or '???'):<{lang_width}} {path:<{path_width}}   ({title_suggestion})")
 
     print("\nПорядок субтитров")
     for i, sub_stream in enumerate(sub_streams):
@@ -481,46 +285,6 @@ def change_mapping(audio_streams, sub_streams, audio_tags):
         
     return tmp_audio_streams + tmp_sub_streams
     
-def get_media_ext(video_path, audio_sub_streams):
-    video_ext = ""
-    audio_ext = []
-    sub_ext = []
-    if video_path:
-        media_file = media_getter(video_path, (".mkv", ".mp4", ".avi", ".mov"))
-        if media_file:
-            video_ext = os.path.splitext(media_file)[1]
-        else:
-            print(f"Внимание: видеофайл не найден в {video_path}")
-    for i, stream in enumerate(audio_sub_streams):
-        if stream.path == "/":
-            path = video_path
-        else:
-            path = os.path.join(video_path, stream.path)
-              
-        if stream.type == "a" and stream.path:
-            media_file = media_getter(path, (".mka", ".flac", ".mp3", ".ac3", ".aac", ".m4a", ".wav", ".wmv", ".mkv", ".mp4"))
-            if media_file:
-                audio_ext.append(os.path.splitext(media_file)[1])
-            else:
-                print(f"Внимание: аудиофайл не найден в {path}")
-                audio_ext.append("")
-        if stream.type == "s" and stream.path:
-            media_file = media_getter(path, (".srt", ".ass", "sub"))
-            if media_file:
-                sub_ext.append(os.path.splitext(media_file)[1])
-            else:
-                print(f"Внимание: субтитры не найдены в {path}")
-                sub_ext.append("")
-    return video_ext, audio_ext, sub_ext
-    
-def media_getter(path, exts):
-    if not os.path.isdir(path):
-        return ""
-    for f in os.listdir(path):
-        if f.endswith(exts):
-            return f
-    return ""
-
 def main():
     base_path, media_folder, audio_tags, name, season = prompt_user_for_media()
 
@@ -556,18 +320,8 @@ def main():
     
     current_video_codec = get_video_codec(folder_to_probe)
     print(f"\nТекущий видеокодек: {current_video_codec or 'не определен'}")
-    while True:
-        print()
-        for i, codec in enumerate(CODECS):
-            print(f"{i}: {codec}")
-        codec = input("\nВыберите кодек (По умолчанию как у оригинала): ")
-        if not codec:
-            break
-        if int(codec) >= len(CODECS):
-            print("\nНеверный ввод")
-        else:    
-            codec = CODECS[int(codec)]
-            break
+    idx = ask_index("\nВыберите кодек (По умолчанию как у оригинала): ", CODECS)
+    codec = CODECS[idx] if idx is not None else ""
             
     bit = None
     while True:
