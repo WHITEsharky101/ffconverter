@@ -6,6 +6,12 @@ from ffcore.ffprobe import run_ffprobe
 
 TUNE_LIST = ['animation', 'grain', 'film']
 
+# Приватные опции x265 — ТОЛЬКО здесь (в -x265-params). Топовые -aq-mode /
+# -row-mt ffmpeg молча игнорирует (2026-08-24, commit 183d8d6).
+# aq-mode=3 — AQ для аниме (бандинг в тёмных сценах), row-mt=1 —
+# межстрочная параллелизация (no-op в некоторых сборках x265, безвредно).
+X265_PARAMS = "asm=avx512:aq-mode=3:row-mt=1"
+
 PIX_FMT_BY_BIT = {
     8: "yuv420p",
     10: "yuv420p10le",

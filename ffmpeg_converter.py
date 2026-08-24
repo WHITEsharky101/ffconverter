@@ -2,19 +2,24 @@ import os
 import subprocess
 import time
 import pickle
+import json
 import re
+import shutil
 import create_ffmpeg_config
 from create_ffmpeg_config import AudioSubStream          # noqa: F401  (public API + pickle identity)
 from create_ffmpeg_config import FFmpegParam            # noqa: F401
 
+from ffcore import crf_select
 from ffcore.storage import save_data, load_config       # noqa: F401  (save_data re-export for symmetry)
 from ffcore.text import process_string, format_timings, format_time  # noqa: F401  (process_string re-export for tests)
-from ffcore.ffmpeg import TUNE_LIST, codec_tag, generate_ffmpeg_command, generate_ffmpeg_input_files, generate_ffmpeg_output_files, generate_ffmpeg_tune_config, generate_ffmpeg_video_config, generate_ffmpeg_audio_config, generate_ffmpeg_mapping_and_meta, generate_ffmpeg_sub_fonts, count_embedded_text_streams, find_episode_files, choose_candidate  # noqa: F401
+from ffcore.ffmpeg import TUNE_LIST, X265_PARAMS, codec_tag, generate_ffmpeg_command, generate_ffmpeg_input_files, generate_ffmpeg_output_files, generate_ffmpeg_tune_config, generate_ffmpeg_video_config, generate_ffmpeg_audio_config, generate_ffmpeg_mapping_and_meta, generate_ffmpeg_sub_fonts, count_embedded_text_streams, find_episode_files, choose_candidate  # noqa: F401
 from ffcore.prompting import ask_index                  # noqa: F401
 
 SAVE_FILE = 'streams_data.pkl'
 # Файл журнала конвертаций — рядом с исходным кодом
 CONVERTLIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'convertlist.txt')
+# VMAF-модели (vmaf/*.json) лежат рядом с кодом — без env-переменных
+VMAF_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vmaf')
 
 # Функция для загрузки данных из файла, если он существует
 def load_data():
@@ -63,13 +68,23 @@ def collect_inputs(audio_sub_streams, params):
         if input_episodes:
             sp_episodes = process_string(input_episodes)
 
-    if params.codec:
-        crf = int(input("\nВведите начальное значение CRF: ") or 18)
-    else:
-        crf = None
-
+    # Пресет спрашивается ДО CRF: автоподбор кодирует сэмплы с тем же
+    # -tune, что и финальный энкод (иначе выбранный CRF смещается).
     tune_idx = ask_index("\nВыберите пресет: ", TUNE_LIST)
     tune = TUNE_LIST[tune_idx] if tune_idx is not None else ""
+    params.tune_preset = tune
+
+    if params.codec:
+        mode = ask_index("\nВыберите способ задания CRF: ",
+                         ["Ручной", "Подбор по метрикам (PSNR/SSIM/VMAF)"])
+        if mode in (None, 0):
+            crf = int(input("\nВведите начальное значение CRF: ") or 18)
+        else:
+            crf = run_autoselect_crf(params)
+            if crf is None:
+                crf = int(input("Подбор CRF не дал результата. Введите CRF вручную: ") or 18)
+    else:
+        crf = None
 
     while True:
         cut_time = input("\nВведите тайминги для вырезания (Пример: 0 1:30): ")
@@ -82,9 +97,169 @@ def collect_inputs(audio_sub_streams, params):
     params.sp_episodes = sp_episodes
     params.episodes = episodes
     params.crf = crf
-    params.tune_preset = tune
     params.cut_time = cut_time
     return params
+
+
+class _AutoselectError(Exception):
+    """Ошибка внутри автоподбора CRF (энкод/замер) — сообщение пользователю."""
+
+
+def _run_cmd(cmd):
+    """subprocess.run для автоподбора; libvmaf-нехватка → понятная ошибка.
+
+    stderr нормализуется в строку (реальный ffmpeg даёт str; тестовые
+    двойники могут передавать список).
+    """
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8")
+    except (OSError, FileNotFoundError) as e:
+        raise _AutoselectError(str(e))
+    stderr = result.stderr
+    if isinstance(stderr, (list, tuple)):
+        stderr = " ".join(stderr)
+    if result.returncode != 0 and "libvmaf" in (stderr or ""):
+        raise _AutoselectError(
+            "в вашем ffmpeg нет libvmaf (используйте docker-образ "
+            "jrottenberg/ffmpeg, в котором он собран)")
+    return result.returncode
+
+
+def _read_file(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def probe_video_info(video_path):
+    """(duration, width) первого видео-стрима; None при ошибке."""
+    command = ["ffprobe", "-v", "error", "-select_streams", "v:0",
+               "-show_entries", "stream=duration,width", "-of", "json",
+               video_path]
+    try:
+        result = subprocess.run(command, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8")
+        if result.returncode != 0:
+            return None
+        stream = json.loads(result.stdout)["streams"][0]
+        return float(stream["duration"]), int(stream.get("width") or 0)
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return None
+
+
+def run_autoselect_crf(params):
+    """Автоподбор CRF по PSNR/SSIM/VMAF (чистая логика — ffcore/crf_select).
+
+    Бинарный поиск CRF [14, 19] на 3 сэмплах (начало+30с / середина /
+    конец-30с) первого выбранного эпизода; пороги PSNR≥50 ∧ SSIM≥0.98 ∧
+    VMAF≥96 на каждый сэмпл. Возвращает int CRF или None (фолбэк на ручной
+    ввод). Сэмплы живут в скрытой .crf_select/ и удаляются в finally.
+    """
+    episodes = list(params.episodes)
+    season = params.season
+    if not episodes:
+        episodes = list(params.sp_episodes)
+        season = "00"
+    if not episodes:
+        print("Не выбрано эпизодов — введите CRF вручную.")
+        return None
+    episode = episodes[0]
+    base_name = f"{params.name} S{season}E{episode}"
+    video_path = choose_candidate(
+        find_episode_files(params.path, base_name, params.video_ext),
+        params)
+    if not video_path:
+        print(f"Не найден файл эпизода {base_name} — введите CRF вручную.")
+        return None
+    print(f"Автоподбор CRF по эпизоду {base_name}")
+    info = probe_video_info(video_path)
+    if info is None:
+        print("Не удалось определить длительность видео — введите CRF вручную.")
+        return None
+    duration, width = info
+    points = crf_select.sample_points(duration)
+    if not points:
+        print("Эпизод слишком короткий для подбора — введите CRF вручную.")
+        return None
+    model_path = os.path.join(VMAF_DIR, crf_select.select_model(width))
+    if not os.path.exists(model_path):
+        print(f"VMAF-модель не найдена: {model_path}")
+        return None
+
+    workdir = os.path.join(params.path, ".crf_select")
+    if os.path.exists(workdir):
+        shutil.rmtree(workdir)
+    os.makedirs(workdir)
+    video_config = generate_ffmpeg_video_config(params.codec, params.bit)
+    if params.tune_preset:
+        video_config += f" -tune {params.tune_preset}"
+    enc_args = video_config.split()
+    try:
+        return _autoselect_search(video_path, points, workdir, model_path,
+                                  enc_args)
+    except _AutoselectError as e:
+        print(f"Ошибка автоподбора CRF: {e}")
+        return None
+    except Exception as e:  # noqa: BLE001 — любой сбой → ручной ввод
+        print(f"Ошибка автоподбора CRF: {e}")
+        return None
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _autoselect_search(video_path, points, workdir, model_path, enc_args):
+    """Бинарный поиск + таблица метрик; выбранный CRF или None."""
+
+    def evaluate(crf):
+        sample_metrics = []
+        for i, (ss, dur) in enumerate(points):
+            enc_path = os.path.join(workdir, f"enc_c{crf}_{i}.mp4")
+            rc = _run_cmd(crf_select.sample_encode_command(
+                video_path, ss, dur, enc_path, enc_args, crf, X265_PARAMS))
+            if rc != 0:
+                raise _AutoselectError(
+                    f"энкод сэмпла {i + 1} (CRF {crf}) завершился с ошибкой")
+            rc = _run_cmd(crf_select.measure_command(
+                enc_path, video_path, ss, dur, workdir, model_path))
+            if rc != 0:
+                raise _AutoselectError(
+                    f"замер метрик сэмпла {i + 1} (CRF {crf}) завершился с ошибкой")
+            psnr = crf_select.parse_psnr_log(_read_file(os.path.join(workdir, "p.log")))
+            ssim = crf_select.parse_ssim_log(_read_file(os.path.join(workdir, "s.log")))
+            vmaf_pair = crf_select.parse_vmaf_json(os.path.join(workdir, "v.json"))
+            if psnr is None or ssim is None or vmaf_pair is None:
+                raise _AutoselectError(
+                    f"не удалось разобрать метрики сэмпла {i + 1} (CRF {crf})")
+            failures = crf_select.gate_failures(psnr, ssim, vmaf_pair[0])
+            sample_metrics.append((psnr, ssim, vmaf_pair[0], failures))
+        table = (
+            f"PSNR {'/'.join(f'{m[0]:.1f}' for m in sample_metrics)} | "
+            f"SSIM {'/'.join(f'{m[1]:.4f}' for m in sample_metrics)} | "
+            f"VMAF {'/'.join(f'{m[2]:.1f}' for m in sample_metrics)}"
+        )
+        failing = [m[3] for m in sample_metrics if m[3]]
+        if failing:
+            why = "; ".join(f"{s + 1}: " + ", ".join(f)
+                            for s, f in enumerate(failing) if f)
+            print(f"CRF {crf}: {table} → НЕ ПРОХОДИТ ({why})")
+            return False
+        print(f"CRF {crf}: {table} → ПРОХОДИТ")
+        return True
+
+    chosen = crf_select.search_crf(evaluate)
+    if chosen is None:
+        print(f"Даже CRF {crf_select.CRF_MIN} не проходит пороги "
+              "(PSNR≥50, SSIM≥0.98, VMAF≥96).")
+        answer = input("Продолжить конвертацию с CRF "
+                       f"{crf_select.CRF_MIN} (y/n)? ")
+        return crf_select.CRF_MIN if answer.strip().lower() in ("y", "д") else None
+    print(f"Выбранный CRF: {chosen}")
+    return chosen
 
 def run_episode(audio_sub_streams, params, episode, sp):
     """Run one ffmpeg conversion, stream its output, log the timing line."""
