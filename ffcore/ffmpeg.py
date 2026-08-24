@@ -283,6 +283,13 @@ def generate_ffmpeg_command(audio_sub_streams, params, index, sp):
     sub_fonts = generate_ffmpeg_sub_fonts(audio_sub_streams, params.output_ext, t_offset=t_offset)
     output_file = generate_ffmpeg_output_files(params, index, sp)
     tune_config = generate_ffmpeg_tune_config(params.crf, params.tune_preset)
-    command = ["ffmpeg", "-analyzeduration", "100M", "-probesize", "100M", *input_files, params.cut_time, *mapping, *video_config.split(), *audio_config, *sub_fonts, "-c:s", "copy", "-aq-mode", "3", "-max_interleave_delta", "0", *metadata, *tune_config, "-preset", "slow", "-threads", "0", "-row-mt", "1", "-x265-params", "asm=avx512", output_file, "-y"]
+    # Приватные опции x265 (asm=avx512, aq-mode=3 — AQ для аниме, row-mt=1)
+    # передаются ТОЛЬКО через -x265-params: топовые -aq-mode/-row-mt ffmpeg
+    # молча игнорирует ("Codec AVOption aq-mode … has not been used"), и
+    # энкод уходит без AQ. Для не-x265 кодексов (h264/copy) словарь не
+    # нужен — и сам флаг -x265-params тоже (сиротский флаг съел бы путь
+    # выходного файла как значение, как это было с -tune в 2026-08-22).
+    x265_args = ["-x265-params", "asm=avx512:aq-mode=3:row-mt=1"] if params.codec == "hevc" else []
+    command = ["ffmpeg", "-analyzeduration", "100M", "-probesize", "100M", *input_files, params.cut_time, *mapping, *video_config.split(), *audio_config, *sub_fonts, "-c:s", "copy", "-max_interleave_delta", "0", *metadata, *tune_config, "-preset", "slow", "-threads", "0", *x265_args, output_file, "-y"]
     command = [arg for arg in command if arg != '']
     return command
