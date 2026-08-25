@@ -3,7 +3,7 @@ plans/
 # Ignore project_info directory
 project_info/
 # Ignore specific data files
-streams_data.pkl
+streams_data.json
 convertlist.txt
 # Ignore virtual environment
 .venv/

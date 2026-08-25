@@ -1,6 +1,6 @@
 import os
 
-from ffcore.models import AudioSubStream, FFmpegParam      # noqa: F401  (public API + pickle identity)
+from ffcore.models import AudioSubStream, FFmpegParam      # noqa: F401  (public API)
 from ffcore.storage import SAVE_FILE, save_data            # noqa: F401
 from ffcore.media import find_media_candidates, list_seasons, _parse_season_note  # noqa: F401
 from ffcore.ffprobe import ffprobe_media, get_video_codec, has_flac_audio  # noqa: F401

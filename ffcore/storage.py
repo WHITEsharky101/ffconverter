@@ -1,33 +1,29 @@
-"""streams_data.pkl serialization (CWD-relative, as before)."""
-import os
-import pickle
-import sys
+"""streams_data.json serialization (CWD-relative, as before).
 
-SAVE_FILE = "streams_data.pkl"
+The config wizard saves {"streams": [AudioSubStream…], "params": FFmpegParam}
+as UTF-8 JSON. Plain dataclass fields only — no pickle, no legacy formats.
+"""
+import json
+from dataclasses import asdict
 
+from ffcore.models import AudioSubStream, FFmpegParam
 
-def _register_legacy_classes():
-    """Pre-refactor pickles record classes under ``__main__``.
-
-    Register the real ffcore.models classes there so such pickles
-    resolve on load (same trick the smoke recipe used by hand).
-    """
-    main = sys.modules.get("__main__")
-    if main is None:
-        return
-    from ffcore.models import AudioSubStream, FFmpegParam
-    for name, cls in (("AudioSubStream", AudioSubStream),
-                      ("FFmpegParam", FFmpegParam)):
-        setattr(main, name, cls)
+SAVE_FILE = "streams_data.json"
 
 
 def save_data(data, path=SAVE_FILE):
-    with open(path, "wb") as f:
-        pickle.dump(data, f)
+    payload = {
+        "streams": [asdict(s) for s in data["streams"]],
+        "params": asdict(data["params"]),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+        f.write("\n")
 
 
 def load_config(path=SAVE_FILE):
-    _register_legacy_classes()
-    with open(path, "rb") as f:
-        data = pickle.load(f)
-    return data["streams"], data["params"]
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    streams = [AudioSubStream(**s) for s in data["streams"]]
+    params = FFmpegParam(**data["params"])
+    return streams, params

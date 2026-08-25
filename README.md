@@ -10,7 +10,7 @@ defaults.
 
 - **Interactive two-step workflow** — a config wizard (media, season,
   streams, codec) then a conversion step (episodes, tune, CRF, cut timings);
-  the wizard's result is saved to `streams_data.pkl` and can be reloaded
+  the wizard's result is saved to `streams_data.json` and can be reloaded
 - **Episode discovery** — `<Name> S<NN>E<NN>` files with optional ` [tags]`
   blocks, per-season and special episodes (`S00`)
 - **Stream management** — embedded + external audio/subtitle tracks,
@@ -50,7 +50,7 @@ pip install rarfile
 
 ### Step 1 — Config wizard (`create_ffmpeg_config.py`)
 
-Runs automatically on first start (no `streams_data.pkl` in the CWD) or when
+Runs automatically on first start (no `streams_data.json` in the CWD) or when
 you answer `n` to “Загрузить данные для …?(y/n)”:
 
 1. **Library root** — the CWD when it contains media folders (a directory is
@@ -72,7 +72,7 @@ you answer `n` to “Загрузить данные для …?(y/n)”:
 11. **Output format** — Enter = same extension as the source video
 12. **FLAC → AAC** — asked only when FLAC audio is present
 
-The result is saved to `streams_data.pkl` in the CWD.
+The result is saved to `streams_data.json` in the CWD.
 
 ### Step 2 — Conversion (`ffmpeg_converter.py`)
 
@@ -206,7 +206,7 @@ ffconverter/
 │   ├── files.py              # Media file lookup by extension
 │   ├── models.py             # FFmpegParam / AudioSubStream dataclasses
 │   ├── prompting.py          # ask_index (numbered menus)
-│   ├── storage.py            # streams_data.pkl save/load (pickle)
+│   ├── storage.py            # streams_data.json save/load (JSON)
 │   └── text.py               # Episode-range parsing, cut-timing formatting
 ├── vmaf/
 │   ├── vmaf_v0.6.1.json      # VMAF model (1080p)
@@ -233,7 +233,7 @@ python3 -m unittest discover -s tests
 | `Error opening output file bash` in Docker | The image entrypoint is `ffmpeg`; use `docker run --entrypoint bash <image> -c "ffmpeg ..."` |
 | `ModuleNotFoundError: rarfile` | `pip install rarfile` |
 | Episode not found | Files must match `<Name> S<NN>E<NN>.<ext>` (tags in brackets allowed) |
-| `Ошибка при загрузке данных` (UnpicklingError) | Old `streams_data.pkl` from a pre-refactor run — answer `n` to re-run the wizard |
+| `Ошибка при загрузке данных` (ValueError/TypeError/KeyError) | Corrupt `streams_data.json` — the wizard re-runs automatically and re-saves a fresh file |
 | Slow conversion | Use a higher CRF or fewer episodes per run |
 
 ## License

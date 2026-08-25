@@ -1,16 +1,15 @@
 import os
 import subprocess
 import time
-import pickle
 import json
 import re
 import shutil
 import create_ffmpeg_config
-from create_ffmpeg_config import AudioSubStream          # noqa: F401  (public API + pickle identity)
+from create_ffmpeg_config import AudioSubStream          # noqa: F401  (public API)
 from create_ffmpeg_config import FFmpegParam            # noqa: F401
 
 from ffcore import crf_select
-from ffcore.storage import load_config
+from ffcore.storage import SAVE_FILE, load_config  # noqa: F401  (SAVE_FILE re-exported)
 from ffcore.text import process_string, format_timings, format_time  # noqa: F401  (process_string re-export for tests)
 from ffcore.ffmpeg import (TUNE_LIST, X265_PARAMS, codec_tag,  # noqa: F401  (test-contract re-exports)
                            generate_ffmpeg_command, generate_ffmpeg_output_files,
@@ -18,7 +17,6 @@ from ffcore.ffmpeg import (TUNE_LIST, X265_PARAMS, codec_tag,  # noqa: F401  (te
                            find_episode_files, choose_candidate)
 from ffcore.prompting import ask_index                  # noqa: F401
 
-SAVE_FILE = 'streams_data.pkl'
 # Файл журнала конвертаций — рядом с исходным кодом
 CONVERTLIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'convertlist.txt')
 # VMAF-модели (vmaf/*.json) лежат рядом с кодом — без env-переменных
@@ -30,7 +28,14 @@ def load_data():
         if not os.path.exists(SAVE_FILE):
             create_ffmpeg_config.main()
             continue
-        streams, params = load_config(SAVE_FILE)
+        try:
+            streams, params = load_config(SAVE_FILE)
+        except (ValueError, TypeError, KeyError) as e:
+            # Битый streams_data.json — не крашимся, перезапускаем мастер:
+            # он пересохранит файл, и на следующей итерации загрузим его.
+            print(f"Ошибка при загрузке данных: {e}. Перезапуск мастера настройки.")
+            create_ffmpeg_config.main()
+            continue
         choice = input(f"\nЗагрузить данные для: {params.path} ?(y/n) ").strip().lower()
         if choice in ("y", "н"):
             return streams, params
@@ -38,7 +43,7 @@ def load_data():
             create_ffmpeg_config.main()
             try:
                 return load_config(SAVE_FILE)
-            except pickle.UnpicklingError as e:
+            except (ValueError, TypeError, KeyError) as e:
                 print(f"Ошибка при загрузке данных: {e}")
                 return streams, params
         print("Неверный ввод")
