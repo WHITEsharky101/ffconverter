@@ -176,17 +176,9 @@ def find_episode_files(dirpath, base_name, exts):
     return candidates
 
 
-def choose_candidate(candidates, params=None):
-    """Выбирает кандидат: если задан params.preferred_codec — отдаём файл, содержащий этот кодек в имени."""
-    if not candidates:
-        return None
-    if params is not None and getattr(params, "preferred_codec", None):
-        pref = params.preferred_codec.upper()
-        for c in candidates:
-            if pref in os.path.basename(c).upper():
-                return c
-    # иначе — первый по сортировке
-    return candidates[0]
+def choose_candidate(candidates):
+    """Первый по сортировке кандидат (или None, если кандидатов нет)."""
+    return candidates[0] if candidates else None
 
 
 def generate_ffmpeg_input_files(audio_sub_streams, params, index, sp):
@@ -198,7 +190,7 @@ def generate_ffmpeg_input_files(audio_sub_streams, params, index, sp):
     video_dir = params.path
     # params.video_ext может быть строкой или список
     video_candidates = find_episode_files(video_dir, base_name, params.video_ext)
-    video_path = choose_candidate(video_candidates, params)
+    video_path = choose_candidate(video_candidates)
     if not video_path:
         raise FileNotFoundError(f"Не найден видеофайл для {base_name} (разыскивались расширения: {params.video_ext}) в {video_dir}")
     input_files.extend(["-i", video_path])
@@ -220,7 +212,7 @@ def generate_ffmpeg_input_files(audio_sub_streams, params, index, sp):
                 # params.audio_ext может быть списком и мы берем i-ый элемент
                 audio_ext = params.audio_ext[i] if isinstance(params.audio_ext, (list, tuple)) else params.audio_ext
                 aud_candidates = find_episode_files(search_dir, base_name, audio_ext)
-                aud_path = choose_candidate(aud_candidates, params)
+                aud_path = choose_candidate(aud_candidates)
                 if aud_path:
                     input_files.extend(["-i", aud_path])
                     i += 1
@@ -233,7 +225,7 @@ def generate_ffmpeg_input_files(audio_sub_streams, params, index, sp):
             sub_idx = i - audio_count if isinstance(params.sub_ext, (list, tuple)) else 0
             sub_ext = params.sub_ext[sub_idx] if isinstance(params.sub_ext, (list, tuple)) else params.sub_ext
             sub_candidates = find_episode_files(search_dir, base_name, sub_ext)
-            sub_path = choose_candidate(sub_candidates, params)
+            sub_path = choose_candidate(sub_candidates)
             if sub_path:
                 input_files.extend(["-i", sub_path])
             else:
@@ -295,7 +287,7 @@ def generate_ffmpeg_command(audio_sub_streams, params, index, sp):
     # энкод уходит без AQ. Для не-x265 кодексов (h264/copy) словарь не
     # нужен — и сам флаг -x265-params тоже (сиротский флаг съел бы путь
     # выходного файла как значение, как это было с -tune в 2026-08-22).
-    x265_args = ["-x265-params", "asm=avx512:aq-mode=3:row-mt=1"] if params.codec == "hevc" else []
-    command = ["ffmpeg", "-analyzeduration", "100M", "-probesize", "100M", *input_files, params.cut_time, *mapping, *video_config.split(), *audio_config, *sub_fonts, "-c:s", "copy", "-max_interleave_delta", "0", *metadata, *tune_config, "-preset", "slow", "-threads", "0", *x265_args, output_file, "-y"]
+    x265_args = ["-x265-params", X265_PARAMS] if params.codec == "hevc" else []
+    command = ["ffmpeg", "-analyzeduration", "100M", "-probesize", "100M", *input_files, *params.cut_time, *mapping, *video_config.split(), *audio_config, *sub_fonts, "-c:s", "copy", "-max_interleave_delta", "0", *metadata, *tune_config, "-preset", "slow", "-threads", "0", *x265_args, output_file, "-y"]
     command = [arg for arg in command if arg != '']
     return command

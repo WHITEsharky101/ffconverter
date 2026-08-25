@@ -2,8 +2,8 @@ import os
 
 from ffcore.models import AudioSubStream, FFmpegParam      # noqa: F401  (public API + pickle identity)
 from ffcore.storage import SAVE_FILE, save_data            # noqa: F401
-from ffcore.media import SEASON_FOLDER_RE, find_media_candidates, list_seasons, _parse_season_note  # noqa: F401
-from ffcore.ffprobe import run_ffprobe, ffprobe_media, get_video_codec, has_flac_audio  # noqa: F401
+from ffcore.media import find_media_candidates, list_seasons, _parse_season_note  # noqa: F401
+from ffcore.ffprobe import ffprobe_media, get_video_codec, has_flac_audio  # noqa: F401
 from ffcore.files import media_getter, get_media_ext       # noqa: F401
 from ffcore.fonts import find_ttf_in_fonts                 # noqa: F401
 from ffcore.prompting import ask_index
@@ -325,9 +325,7 @@ def main():
 
     stream_with_fonts = []
     for stream in additional_subtitle_streams:
-        font_stream = find_ttf_in_fonts(folder_to_probe, stream)
-        stream_with_fonts.append(font_stream)
-        print(font_stream.fonts)
+        stream_with_fonts.append(find_ttf_in_fonts(folder_to_probe, stream))
     additional_subtitle_streams = stream_with_fonts
         
     audio_streams = additional_audio_streams + embedded_audio_streams

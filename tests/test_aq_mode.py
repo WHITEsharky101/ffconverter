@@ -35,7 +35,7 @@ def make_params(tmp, codec="hevc", crf=18, tune="animation"):
         bit=8,
         crf=crf,
         tune_preset=tune,
-        cut_time="",
+        cut_time=[],
     )
 
 
@@ -77,6 +77,21 @@ class AqModePlacementTest(unittest.TestCase):
         cmd = self.command()
         self.assertNotIn("-x265-params", cmd)
         self.assertNotIn("-aq-mode", cmd)
+
+    def test_cut_time_list_is_spread_into_argv(self):
+        # format_timings returns an argv LIST; it must be unpacked into the
+        # command, not appear as one nested element.
+        self.params.cut_time = ["-ss", "00:00:10", "-to", "00:01:30"]
+        cmd = self.command()
+        i = cmd.index("-ss")
+        self.assertEqual(cmd[i:i + 4], ["-ss", "00:00:10", "-to", "00:01:30"])
+
+    def test_format_timings_returns_argv_list(self):
+        from ffcore.text import format_timings
+        self.assertEqual(
+            format_timings("10 1:30"),
+            ["-ss", "00:00:10", "-to", "00:01:30"])
+        self.assertEqual(format_timings("garbage"), [])
 
 
 if __name__ == "__main__":

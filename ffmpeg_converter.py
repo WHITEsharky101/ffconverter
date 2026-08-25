@@ -10,9 +10,12 @@ from create_ffmpeg_config import AudioSubStream          # noqa: F401  (public A
 from create_ffmpeg_config import FFmpegParam            # noqa: F401
 
 from ffcore import crf_select
-from ffcore.storage import save_data, load_config       # noqa: F401  (save_data re-export for symmetry)
+from ffcore.storage import load_config
 from ffcore.text import process_string, format_timings, format_time  # noqa: F401  (process_string re-export for tests)
-from ffcore.ffmpeg import TUNE_LIST, X265_PARAMS, codec_tag, generate_ffmpeg_command, generate_ffmpeg_input_files, generate_ffmpeg_output_files, generate_ffmpeg_tune_config, generate_ffmpeg_video_config, generate_ffmpeg_audio_config, generate_ffmpeg_mapping_and_meta, generate_ffmpeg_sub_fonts, count_embedded_text_streams, find_episode_files, choose_candidate  # noqa: F401
+from ffcore.ffmpeg import (TUNE_LIST, X265_PARAMS, codec_tag,  # noqa: F401  (test-contract re-exports)
+                           generate_ffmpeg_command, generate_ffmpeg_output_files,
+                           generate_ffmpeg_tune_config, generate_ffmpeg_video_config,
+                           find_episode_files, choose_candidate)
 from ffcore.prompting import ask_index                  # noqa: F401
 
 SAVE_FILE = 'streams_data.pkl'
@@ -171,8 +174,7 @@ def run_autoselect_crf(params):
     episode = episodes[0]
     base_name = f"{params.name} S{season}E{episode}"
     video_path = choose_candidate(
-        find_episode_files(params.path, base_name, params.video_ext),
-        params)
+        find_episode_files(params.path, base_name, params.video_ext))
     if not video_path:
         print(f"Не найден файл эпизода {base_name} — введите CRF вручную.")
         return None

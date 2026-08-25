@@ -45,6 +45,11 @@ def process_string(input_string):
 
 
 def format_timings(input_str):
+    """Возвращает СПИСОК аргументов ffmpeg: ['-ss', H:MM:SS, '-to', H:MM:SS]
+    (или [] при некорректном вводе). Список — потому что команда собирается
+    списком argv (без shell): строка стала бы ОДНИМ аргументом и ffmpeg
+    упёрся бы в неё как в путь файла.
+    """
     timings = input_str.split()
 
     if len(timings) != 2:
@@ -70,7 +75,7 @@ def format_timings(input_str):
 
         formatted_timings.append(f"{hours:02}:{minutes:02}:{seconds:02}")
 
-    return f"-ss {formatted_timings[0]} -to {formatted_timings[1]}"
+    return ["-ss", formatted_timings[0], "-to", formatted_timings[1]]
 
 
 def format_time(seconds):

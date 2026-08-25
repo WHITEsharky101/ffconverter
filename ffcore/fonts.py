@@ -21,7 +21,6 @@ def find_fonts_in_directory(directory):
                 fonts.append(os.path.join(root, file))
         if fonts:
             break
-    print(fonts)
     return fonts
 
 
