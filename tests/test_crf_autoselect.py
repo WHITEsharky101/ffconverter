@@ -18,6 +18,7 @@ from contextlib import redirect_stdout
 from unittest import mock
 
 import ffmpeg_converter
+from ffcore.models import FFmpegParam
 
 
 def make_params(tmp, episodes=("01",)):
@@ -210,6 +211,100 @@ class AutoselectDriverTest(unittest.TestCase):
         self.assertIsNone(crf)
         self.assertIn("Ошибка автоподбора", out)
         self.assertFalse(os.path.exists(self.workdir))
+
+
+class CollectInputsTest(unittest.TestCase):
+    """Regression: collect_inputs must publish user-entered episode lists
+    to params BEFORE the CRF block — autoselect reads params.episodes /
+    params.sp_episodes, and the wizard saves them empty to
+    streams_data.json (2026-08-25 user report: autoselect always bailed
+    out with 'Не выбрано эпизодов')."""
+
+    AUTOSELECT_SENTINEL = 17
+
+    def make_wizard_params(self, media_dir):
+        """Mirror the wizard's FFmpegParam: episodes/sp_episodes empty."""
+        return FFmpegParam(
+            name="Show", season="01", path=media_dir,
+            episodes=[], sp_episodes=[],
+            video_ext=[".mp4"], audio_ext=[], sub_ext=[],
+            output_ext=".mp4", flac_convert=False,
+            codec="hevc", bit=8, tune_preset="", cut_time=[], crf=None,
+        )
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _write(self, *filenames):
+        for fn in filenames:
+            open(os.path.join(self.tmp.name, fn), "w").close()
+
+    def run_collect(self, params, answers):
+        """Drive collect_inputs with scripted stdin + autoselect stub.
+
+        The stub SNAPSHOTs the episode lists at call time (they are
+        compared by reference later; a late assignment inside
+        collect_inputs would otherwise be invisible to the test).
+        """
+        captured = {}
+
+        def fake_autoselect(p):
+            captured["params"] = p
+            captured["episodes"] = list(p.episodes)
+            captured["sp_episodes"] = list(p.sp_episodes)
+            return self.AUTOSELECT_SENTINEL
+
+        buf = io.StringIO()
+        with mock.patch("builtins.input", side_effect=list(answers)), \
+                mock.patch.object(ffmpeg_converter, "run_autoselect_crf",
+                                  fake_autoselect), \
+                mock.patch.object(ffmpeg_converter.subprocess, "run",
+                                  lambda cmd, **kw: None), \
+                redirect_stdout(buf):
+            result = ffmpeg_converter.collect_inputs([], params)
+        return result, captured, buf.getvalue()
+
+
+    def test_autoselect_receives_entered_episodes(self):
+        media_dir = self.tmp.name
+        self._write("Show S01E01.mp4", "Show S01E02.mp4", "Show S01E03.mp4")
+        params = self.make_wizard_params(media_dir)
+        # stdin: episodes "1-3", tune 0 (animation), CRF mode 1 (autoselect),
+        # no cut timings
+        result, captured, _ = self.run_collect(params, ["1-3", "0", "1", ""])
+        self.assertIn("params", captured,
+                      "autoselect must be called in autoselect mode")
+        self.assertEqual(captured["episodes"], ["01", "02", "03"])
+        self.assertEqual(result.episodes, ["01", "02", "03"])
+        self.assertEqual(result.crf, self.AUTOSELECT_SENTINEL)
+
+    def test_autoselect_receives_sp_episodes(self):
+        media_dir = self.tmp.name
+        self._write("Show S00E01.mp4", "Show S01E02.mp4")
+        params = self.make_wizard_params(media_dir)
+        # stdin: episodes "2" (S01E02 exists), sp "1" (S00E01), tune 0,
+        # CRF mode 1 (autoselect), no cut timings
+        result, captured, _ = self.run_collect(
+            params, ["2", "1", "0", "1", ""])
+        self.assertIn("params", captured)
+        self.assertEqual(captured["episodes"], ["02"])
+        self.assertEqual(captured["sp_episodes"], ["01"])
+        self.assertEqual(result.episodes, ["02"])
+        self.assertEqual(result.sp_episodes, ["01"])
+        self.assertEqual(result.crf, self.AUTOSELECT_SENTINEL)
+
+    def test_manual_mode_unchanged(self):
+        media_dir = self.tmp.name
+        self._write("Show S01E01.mp4")
+        params = self.make_wizard_params(media_dir)
+        # stdin: episodes "1", tune 0, CRF mode 0 (manual), CRF "18", no cut
+        result, captured, _ = self.run_collect(
+            params, ["1", "0", "0", "18", ""])
+        self.assertNotIn("params", captured,
+                         "manual mode must not invoke autoselect")
+        self.assertEqual(result.episodes, ["01"])
+        self.assertEqual(result.crf, 18)
 
 
 if __name__ == "__main__":

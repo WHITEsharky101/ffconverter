@@ -75,6 +75,10 @@ def collect_inputs(audio_sub_streams, params):
         input_episodes = input("\nВведите спец эпизоды для конвертации (Пример: 1-5 6 9): ")
         if input_episodes:
             sp_episodes = process_string(input_episodes)
+    # Автоподбор CRF (ниже) читает params.episodes/sp_episodes —
+    # публикуем введённые списки ДО блока CRF (мастер сохраняет их пустыми).
+    params.episodes = episodes
+    params.sp_episodes = sp_episodes
 
     # Пресет спрашивается ДО CRF: автоподбор кодирует сэмплы с тем же
     # -tune, что и финальный энкод (иначе выбранный CRF смещается).
@@ -102,8 +106,6 @@ def collect_inputs(audio_sub_streams, params):
         if cut_time:
             break
 
-    params.sp_episodes = sp_episodes
-    params.episodes = episodes
     params.crf = crf
     params.cut_time = cut_time
     return params
