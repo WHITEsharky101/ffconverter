@@ -118,6 +118,22 @@ class ProbeVideoInfoTest(unittest.TestCase):
         out = json.dumps({"streams": [{"width": 1920}]})
         self.assertIsNone(self.probe(out=out))
 
+    def test_mkv_duration_falls_back_to_format_level(self):
+        # MKV/Matroska: ffprobe puts NO "duration" on the stream level —
+        # only width; the duration lives in format.duration (2026-08-25
+        # user report: S03E01.mkv -> {"streams": [{"width": 1920}]}).
+        out = json.dumps({"streams": [{"width": 1920}],
+                          "format": {"duration": "1420.053000"}})
+        fake = mock.Mock(return_value=types.SimpleNamespace(
+            returncode=0, stdout=out, stderr=""))
+        with mock.patch.object(ffmpeg_converter.subprocess, "run",
+                               fake) as run_mock:
+            result = ffmpeg_converter.probe_video_info("/v.mkv")
+        self.assertEqual(result, (1420.053, 1920))
+        # single ffprobe call covering both levels
+        command = run_mock.call_args[0][0]
+        self.assertIn("stream=duration,width:format=duration", command)
+
 
 class AutoselectDriverTest(unittest.TestCase):
     def setUp(self):

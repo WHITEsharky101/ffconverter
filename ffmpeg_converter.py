@@ -146,18 +146,29 @@ def _read_file(path):
 
 
 def probe_video_info(video_path):
-    """(duration, width) первого видео-стрима; None при ошибке."""
+    """(duration, width) первого видео-стрима; None при ошибке.
+
+    Длительность берётся со stream-уровня; если его нет (MKV/Matroska
+    не кладёт stream-длительность) — с format-уровня.
+    """
     command = ["ffprobe", "-v", "error", "-select_streams", "v:0",
-               "-show_entries", "stream=duration,width", "-of", "json",
-               video_path]
+               "-show_entries", "stream=duration,width:format=duration",
+               "-of", "json", video_path]
     try:
         result = subprocess.run(command, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True,
                                 encoding="utf-8")
         if result.returncode != 0:
             return None
-        stream = json.loads(result.stdout)["streams"][0]
-        return float(stream["duration"]), int(stream.get("width") or 0)
+        data = json.loads(result.stdout)
+        stream = data["streams"][0]
+        width = int(stream.get("width") or 0)
+        raw = stream.get("duration")
+        if raw in (None, ""):
+            raw = data.get("format", {}).get("duration")
+        if raw in (None, ""):
+            return None
+        return float(raw), width
     except (OSError, ValueError, KeyError, IndexError, TypeError):
         return None
 
