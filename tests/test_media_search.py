@@ -7,6 +7,7 @@ prompt_user_for_media (integration, mocked find_media_folder).
 Stdlib unittest + tempfile + unittest.mock only.
 """
 
+import json
 import os
 import tempfile
 import unittest
@@ -159,6 +160,14 @@ class PromptUserForMediaTest(unittest.TestCase):
         # name inside it (absolute base_path).
         self._outside = tempfile.TemporaryDirectory()
         self.addCleanup(self._outside.cleanup)
+        self._settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._settings_dir.cleanup)
+        self._settings_patch = mock.patch.object(
+            cfc, "SETTINGS_FILE",
+            os.path.join(self._settings_dir.name, "settings.json"),
+        )
+        self._settings_patch.start()
+        self.addCleanup(self._settings_patch.stop)
         old_cwd = os.getcwd()
         self.addCleanup(os.chdir, old_cwd)
         os.chdir(self._outside.name)
@@ -181,6 +190,14 @@ class PromptUserForMediaTest(unittest.TestCase):
         # A root without media folders is rejected; the second attempt wins.
         self._outside = tempfile.TemporaryDirectory()
         self.addCleanup(self._outside.cleanup)
+        self._settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._settings_dir.cleanup)
+        self._settings_patch = mock.patch.object(
+            cfc, "SETTINGS_FILE",
+            os.path.join(self._settings_dir.name, "settings.json"),
+        )
+        self._settings_patch.start()
+        self.addCleanup(self._settings_patch.stop)
         old_cwd = os.getcwd()
         self.addCleanup(os.chdir, old_cwd)
         os.chdir(self._outside.name)
@@ -195,6 +212,113 @@ class PromptUserForMediaTest(unittest.TestCase):
         self.assertEqual(name, "Blue Archive")
         self.assertEqual(base_path, os.path.join(self.tmp, "Blue Archive") + "/")
         self.assertEqual(season, "01")
+
+
+class PromptLibraryRootTest(unittest.TestCase):
+    """prompt_library_root: entered root persisted to settings.json.
+
+    Empty input -> saved directory; entered path -> new directory (saved).
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = self._tmp.name
+        for name in MEDIA_NAMES:
+            make_media_dir(self.tmp, name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _setup_outside(self):
+        """chdir into an empty dir (no media in CWD) + tmp settings.json."""
+        self._outside = tempfile.TemporaryDirectory()
+        self.addCleanup(self._outside.cleanup)
+        self._settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._settings_dir.cleanup)
+        self._settings_patch = mock.patch.object(
+            cfc, "SETTINGS_FILE",
+            os.path.join(self._settings_dir.name, "settings.json"),
+        )
+        self._settings_patch.start()
+        self.addCleanup(self._settings_patch.stop)
+        self.settings_path = os.path.join(self._settings_dir.name, "settings.json")
+        old_cwd = os.getcwd()
+        self.addCleanup(os.chdir, old_cwd)
+
+    def _write_saved_root(self, root):
+        with open(self.settings_path, "w", encoding="utf-8") as f:
+            json.dump({"library_root": root}, f, ensure_ascii=False, indent=2)
+
+    def test_entered_root_is_persisted(self):
+        self._setup_outside()
+        os.chdir(self._outside.name)
+        inputs = iter([self.tmp, "Blue Period", "1"])
+        with mock.patch("builtins.input", side_effect=lambda prompt=None: next(inputs)), \
+                mock.patch.object(
+                    cfc,
+                    "find_media_folder",
+                    side_effect=[("Blue Period S01", [])],
+                ):
+            base_path, _, _, name, _ = cfc.prompt_user_for_media()
+        self.assertEqual(name, "Blue Period")
+        with open(self.settings_path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f), {"library_root": os.path.abspath(self.tmp)})
+        # base_path is resolved against the saved root, not the foreign CWD.
+        self.assertEqual(base_path, os.path.join(self.tmp, "Blue Period") + "/")
+
+    def test_empty_input_uses_saved_root(self):
+        self._setup_outside()
+        os.chdir(self._outside.name)
+        self._write_saved_root(self.tmp)
+        inputs = iter(["", "Blue Period", "1"])
+        with mock.patch("builtins.input", side_effect=lambda prompt=None: next(inputs)) as m, \
+                mock.patch.object(
+                    cfc,
+                    "find_media_folder",
+                    side_effect=[("Blue Period S01", [])],
+                ):
+            base_path, _, _, name, _ = cfc.prompt_user_for_media()
+        # The saved root is used on empty input — the root prompt is
+        # asked exactly once (no re-prompt).
+        self.assertEqual(name, "Blue Period")
+        root_prompts = [
+            c for c in m.call_args_list if "корню библиотеки" in str(c.args)
+        ]
+        self.assertEqual(len(root_prompts), 1)
+        self.assertEqual(base_path, os.path.join(self.tmp, "Blue Period") + "/")
+
+    def test_stale_saved_root_reprompts_then_saves_new(self):
+        self._setup_outside()
+        os.chdir(self._outside.name)
+        stale = os.path.join(self._outside.name, "moved-away")
+        os.makedirs(stale)
+        self._write_saved_root(stale)
+        inputs = iter(["", self.tmp, "archive", "1"])
+        with mock.patch("builtins.input", side_effect=lambda prompt=None: next(inputs)), \
+                mock.patch.object(
+                    cfc,
+                    "find_media_folder",
+                    side_effect=[("Blue Archive S01", [])],
+                ):
+            base_path, _, _, name, _ = cfc.prompt_user_for_media()
+        # Stale saved root is not used silently; the new entry overwrites it.
+        self.assertEqual(name, "Blue Archive")
+        with open(self.settings_path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f), {"library_root": os.path.abspath(self.tmp)})
+        self.assertEqual(base_path, os.path.join(self.tmp, "Blue Archive") + "/")
+
+    def test_saved_root_not_used_when_media_in_cwd(self):
+        # Classic path: media in CWD -> "." without a prompt; settings untouched.
+        self._setup_outside()
+        os.chdir(self.tmp)
+        self._write_saved_root(os.path.join(self.tmp, "unrelated"))
+        with mock.patch("builtins.input", side_effect=AssertionError("no prompt")):
+            self.assertEqual(cfc.prompt_library_root(), ".")
+        # The file must keep the old saved root (no overwrite, no delete).
+        with open(self.settings_path, encoding="utf-8") as f:
+            self.assertEqual(
+                json.load(f), {"library_root": os.path.join(self.tmp, "unrelated")}
+            )
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+import json
 import os
 
 from ffcore.models import AudioSubStream, FFmpegParam      # noqa: F401  (public API)
@@ -106,6 +107,31 @@ def select_media_name(query, base="."):
         print("Неверный ввод, попробуйте снова.")
 
 
+# Файл настроек мастера — рядом с исходным кодом (сохранённый корень библиотеки)
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
+
+
+def _read_library_root():
+    """Сохранённый корень библиотеки или None (нет файла / битый JSON / неверный тип)."""
+    try:
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    root = data.get('library_root')
+    if isinstance(root, str) and root:
+        return root
+    return None
+
+
+def _save_library_root(root):
+    """Сохранить корень библиотеки в settings.json (перезапись)."""
+    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump({'library_root': root}, f, ensure_ascii=False, indent=2)
+
+
 def prompt_library_root():
     """Каталог, в котором искать медиа-папки.
 
@@ -113,17 +139,38 @@ def prompt_library_root():
     откуда запущен скрипт). Промпт появляется только тогда, когда в
     текущем каталоге нет ни одной медиа-папки — например, когда исходный
     код перенесён на уровень выше корня библиотеки.
+
+    Введённый корень сохраняется в settings.json, чтобы не вводить его
+    каждый раз: пустой ввод — использование сохранённого каталога,
+    ввод пути — новый каталог (он становится сохранённым).
     """
     if find_media_candidates("", "."):
         return "."
+    saved = _read_library_root()
     while True:
-        root = input(
-            "\nМедиа-папки в текущем каталоге не найдены.\n"
-            "Введите путь к корню библиотеки (Enter — текущий каталог): "
-        ).strip()
+        if saved:
+            print(f"\nМедиа-папки в текущем каталоге не найдены.\n"
+                  f"Сохранённый корень: {saved}\n")
+            root = input(
+                "Введите путь к корню библиотеки (Enter — сохранённый каталог): "
+            ).strip()
+        else:
+            root = input(
+                "\nМедиа-папки в текущем каталоге не найдены.\n"
+                "Введите путь к корню библиотеки (Enter — текущий каталог): "
+            ).strip()
         if not root:
+            if saved:
+                # Пустой ввод = сохранённый каталог; если в нём больше нет
+                # медиа-папок (библиотека уехала) — переспрашиваем.
+                if find_media_candidates("", saved):
+                    return saved
+                print(f"В каталоге '{saved}' нет медиа-папок. Попробуйте ещё раз.")
+                continue
             return "."
+        root = os.path.abspath(root)
         if find_media_candidates("", root):
+            _save_library_root(root)
             return root
         print(f"В каталоге '{root}' нет медиа-папок. Попробуйте ещё раз.")
 

@@ -55,7 +55,13 @@ you answer `n` to “Загрузить данные для …?(y/n)”:
 
 1. **Library root** — the CWD when it contains media folders (a directory is
    “media” if it has a `<Name> S<NN>` subfolder); otherwise you are asked for
-   the path to the library root
+   the path to the library root. The entered root is persisted to
+   `settings.json` (next to the source code, gitignored) so you are not asked
+   again: **empty input** re-uses the saved directory, **entering a path**
+   switches to the new directory (which becomes the saved one). A saved root
+   that no longer contains media folders (library moved/renamed) is rejected
+   with a warning and you are asked again. Relative paths are stored as
+   absolute. Corrupt/missing `settings.json` is treated as “no saved root”.
 2. **Media name** — fuzzy match against media folders
 3. **Season** — numbered list parsed from `<Name> S<NN>` folder names, with
    the `[note]` part of the folder name shown (e.g. `S01 [Anidub, AniLibria]`);

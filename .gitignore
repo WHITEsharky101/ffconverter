@@ -5,6 +5,7 @@ project_info/
 # Ignore specific data files
 streams_data.json
 convertlist.txt
+settings.json
 # Ignore virtual environment
 .venv/
 # Ignore IDE settings
