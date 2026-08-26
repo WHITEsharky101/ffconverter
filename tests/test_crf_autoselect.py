@@ -34,25 +34,55 @@ def make_params(tmp, episodes=("01",)):
     )
 
 
+class FakePopen:
+    """Popen double for the ffmpeg encode/measure commands.
+
+    .stderr is a line-iterable stream like a real text-mode Popen stderr;
+    .wait()/.returncode complete the protocol used by
+    ffmpeg_converter._run_cmd.
+    """
+
+    def __init__(self, returncode, stderr=""):
+        self.returncode = returncode
+        self._stderr = stderr
+
+    @property
+    def stderr(self):
+        return io.StringIO(self._stderr)
+
+    def wait(self):
+        return self.returncode
+
+
 class FakeFfmpeg:
-    """Dispatches mocked subprocess.run between ffprobe / encode / measure."""
+    """Mocks the subprocess layer of run_autoselect_crf.
+
+    .run   — ffprobe (probe) + `ffmpeg -filters` (vmaf preflight) and the
+             encode/measure path for code that still uses subprocess.run.
+    .popen — encode/measure for code that uses subprocess.Popen (live
+             stderr streaming).
+    """
 
     def __init__(self, duration=75.0, width=1920, vmaf_for=None,
-                 measure_rc=0, measure_stderr=""):
+                 measure_rc=0, measure_stderr="", has_vmaf=True):
         self.duration = duration
         self.width = width
         # crf -> vmaf (callables) or None (default 97.0)
         self.vmaf_for = vmaf_for
         self.measure_rc = measure_rc
         self.measure_stderr = measure_stderr
+        self.has_vmaf = has_vmaf
         self.last_crf = None
         self.calls = []
 
-    def __call__(self, cmd, **kwargs):
+    def run(self, cmd, **kwargs):
         self.calls.append(cmd)
         if cmd[0] == "ffprobe":
-            return self._probe()
+            return self._result(0, out=json.dumps({"streams": [{
+                "duration": str(self.duration), "width": self.width}]}))
         if cmd[0] == "ffmpeg":
+            if "-filters" in cmd:
+                return self._result(0, out=self._filters_out())
             if "-x265-params" in cmd:
                 self.last_crf = int(cmd[cmd.index("-crf") + 1])
                 return self._result(0)
@@ -61,9 +91,24 @@ class FakeFfmpeg:
                 return self._result(self.measure_rc, err=self.measure_stderr)
         return self._result(0)
 
-    def _probe(self):
-        return self._result(0, out=json.dumps({"streams": [{
-            "duration": str(self.duration), "width": self.width}]}))
+    def popen(self, cmd, **kwargs):
+        self.calls.append(cmd)
+        if cmd[0] == "ffmpeg":
+            if "-x265-params" in cmd:
+                self.last_crf = int(cmd[cmd.index("-crf") + 1])
+                return FakePopen(0)
+            if "-filter_complex" in cmd:
+                self._write_metrics(cmd)
+                return FakePopen(self.measure_rc, self.measure_stderr)
+        return FakePopen(0)
+
+    def _filters_out(self):
+        # real -filters line format; vmafmotion is always present as the
+        # decoy, the libvmaf token only when the filter is "built in"
+        lines = [" ... vmafmotion        V->V       Calculate the VMAF Motion score."]
+        if self.has_vmaf:
+            lines.append(" .. libvmaf           VV->V      (null)")
+        return "\n".join(lines) + "\n"
 
     def _write_metrics(self, cmd):
         # workdir = directory of p.log inside the filter_complex string
@@ -87,10 +132,19 @@ class FakeFfmpeg:
         return types.SimpleNamespace(returncode=rc, stdout=out, stderr=err)
 
 
+class FakeSubprocess:
+    """(run, popen) pair for run_autoselect — per-test overrides."""
+    def __init__(self, run, popen):
+        self.run = run
+        self.popen = popen
+
+
 def run_autoselect(params, fake, answers=()):
     """Drive run_autoselect_crf with subprocess mocked; capture stdout."""
     buf = io.StringIO()
-    with mock.patch.object(ffmpeg_converter.subprocess, "run", fake), \
+    with mock.patch.object(ffmpeg_converter.subprocess, "run", fake.run), \
+            mock.patch.object(ffmpeg_converter.subprocess, "Popen",
+                              fake.popen), \
             mock.patch("builtins.input", side_effect=list(answers)), \
             redirect_stdout(buf):
         crf = ffmpeg_converter.run_autoselect_crf(params)
@@ -172,11 +226,34 @@ class AutoselectDriverTest(unittest.TestCase):
         self.assertIsNone(crf)
 
     def test_libvmaf_missing(self):
-        fake = FakeFfmpeg(measure_rc=1,
-                          measure_stderr="No such filter: 'libvmaf'")
+        # the filter is genuinely absent from -filters (only the
+        # vmafmotion decoy) -> honest docker hint before any encode
+        fake = FakeFfmpeg(has_vmaf=False)
         crf, out = run_autoselect(self.params, fake)
         self.assertIsNone(crf)
         self.assertIn("jrottenberg/ffmpeg", out)
+        self.assertFalse(any("-x265-params" in c for c in fake.calls),
+                         "preflight must bail before any encode")
+
+    def test_measure_failure_shows_ffmpeg_error(self):
+        # libvmaf present but failing to init (model error) must surface
+        # the real ffmpeg line, not the canned "no libvmaf" (the old
+        # substring heuristic fired on ANY stderr containing "libvmaf")
+        fake = FakeFfmpeg(measure_rc=1, measure_stderr=(
+            "[libvmaf @ 0x55f3c8a1b200] Could not open model file "
+            "'/home/user/vmaf_v0.6.1.json'"))
+        crf, out = run_autoselect(self.params, fake)
+        self.assertIsNone(crf)
+        self.assertIn("Could not open model file", out)
+        self.assertNotIn("нет libvmaf", out)
+
+    def test_output_streamed_during_run(self):
+        # a successful run streams ffmpeg stderr live: a note line from
+        # the measure command must appear in the console output
+        fake = FakeFfmpeg(measure_stderr="[libvmaf @ 0x55] note: vmaf ok\n")
+        crf, out = run_autoselect(self.params, fake)
+        self.assertEqual(crf, 19)
+        self.assertIn("[libvmaf @ 0x55] note: vmaf ok", out)
 
     def test_no_episodes(self):
         self.params.episodes = []
@@ -193,11 +270,14 @@ class AutoselectDriverTest(unittest.TestCase):
 
     def test_probe_failure(self):
         fake = FakeFfmpeg()
-        real = fake
-        broken = lambda cmd, **kw: (
-            real(cmd, **kw) if cmd[0] != "ffprobe"
-            else types.SimpleNamespace(returncode=1, stdout="", stderr=""))
-        crf, out = run_autoselect(self.params, broken)
+
+        def broken_run(cmd, **kw):
+            if cmd[0] == "ffprobe":
+                return types.SimpleNamespace(returncode=1, stdout="", stderr="")
+            return fake.run(cmd, **kw)
+
+        crf, out = run_autoselect(self.params,
+                                  FakeSubprocess(broken_run, fake.popen))
         self.assertIsNone(crf)
         self.assertIn("Не удалось определить длительность видео", out)
 
@@ -218,12 +298,18 @@ class AutoselectDriverTest(unittest.TestCase):
     def test_workdir_cleaned_on_error(self):
         fake = FakeFfmpeg()
 
-        def boom(cmd, **kw):
+        def boom_run(cmd, **kw):
             if cmd[0] == "ffmpeg" and "-x265-params" in cmd:
                 raise OSError("disk full")
-            return fake(cmd, **kw)
+            return fake.run(cmd, **kw)
 
-        crf, out = run_autoselect(self.params, boom)
+        def boom_popen(cmd, **kw):
+            if "-x265-params" in cmd:
+                raise OSError("disk full")
+            return fake.popen(cmd, **kw)
+
+        crf, out = run_autoselect(self.params,
+                                  FakeSubprocess(boom_run, boom_popen))
         self.assertIsNone(crf)
         self.assertIn("Ошибка автоподбора", out)
         self.assertFalse(os.path.exists(self.workdir))

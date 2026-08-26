@@ -116,25 +116,57 @@ class _AutoselectError(Exception):
 
 
 def _run_cmd(cmd):
-    """subprocess.run для автоподбора; libvmaf-нехватка → понятная ошибка.
+    """ffmpeg-команда автоподбора: stderr стримится в консоль построчно.
 
-    stderr нормализуется в строку (реальный ffmpeg даёт str; тестовые
-    двойники могут передавать список).
+    Возвращает (returncode, stderr_text). Живой вывод нужен, чтобы
+    пользователь сразу видел реальную ошибку (например, падение init
+    libvmaf), а не шаблонное сообщение постфактум. Команды уже с
+    -loglevel error, поэтому при успехе выводится ничего.
     """
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True,
                                 encoding="utf-8")
     except (OSError, FileNotFoundError) as e:
         raise _AutoselectError(str(e))
-    stderr = result.stderr
-    if isinstance(stderr, (list, tuple)):
-        stderr = " ".join(stderr)
-    if result.returncode != 0 and "libvmaf" in (stderr or ""):
-        raise _AutoselectError(
-            "в вашем ffmpeg нет libvmaf (используйте docker-образ "
-            "jrottenberg/ffmpeg, в котором он собран)")
-    return result.returncode
+    lines = []
+    for line in (proc.stderr or []):
+        lines.append(line)
+        print(line, end="")
+    proc.wait()
+    return proc.returncode, "".join(lines)
+
+
+def _ffmpeg_has_vmaf():
+    """Есть ли в ffmpeg фильтр libvmaf (по выводу -filters).
+
+    Флаг --enable-libvmaf в configure не гарантирует фильтр, а
+    `ffmpeg -h filter=libvmaf` возвращает 0 даже без фильтра —
+    единственный надёжный признак: имя libvmaf в списке фильтров
+    (vmafmotion не засчитывается).
+    """
+    try:
+        result = subprocess.run(["ffmpeg", "-hide_banner", "-filters"],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8")
+    except (OSError, FileNotFoundError):
+        return False
+    if result.returncode != 0:
+        return False
+    names = set()
+    for line in (result.stdout or "").splitlines():
+        parts = line.split()
+        # строка списка: флаги(«..») имя входа->выхода описание…
+        if len(parts) >= 3 and re.fullmatch(r"[A-Za-z0-9_.]+", parts[1]):
+            names.add(parts[1])
+    return "libvmaf" in names
+
+
+def _last_error_line(stderr):
+    """Последняя непустая строка stderr (для цитирования в ошибке)."""
+    lines = [l.strip() for l in (stderr or "").splitlines() if l.strip()]
+    return lines[-1] if lines else "ffmpeg не выдал текст ошибки"
 
 
 def _read_file(path):
@@ -210,6 +242,12 @@ def run_autoselect_crf(params):
     if not os.path.exists(model_path):
         print(f"VMAF-модель не найдена: {model_path}")
         return None
+    if not _ffmpeg_has_vmaf():
+        print("В вашем ffmpeg нет фильтра vmaf (libvmaf не собран) — "
+              "автоподбор по метрикам невозможен. Используйте docker-образ "
+              "jrottenberg/ffmpeg, в котором он собран, "
+              "или введите CRF вручную.")
+        return None
 
     workdir = os.path.join(params.path, ".crf_select")
     if os.path.exists(workdir):
@@ -239,16 +277,18 @@ def _autoselect_search(video_path, points, workdir, model_path, enc_args):
         sample_metrics = []
         for i, (ss, dur) in enumerate(points):
             enc_path = os.path.join(workdir, f"enc_c{crf}_{i}.mp4")
-            rc = _run_cmd(crf_select.sample_encode_command(
+            rc, err = _run_cmd(crf_select.sample_encode_command(
                 video_path, ss, dur, enc_path, enc_args, crf, X265_PARAMS))
             if rc != 0:
                 raise _AutoselectError(
-                    f"энкод сэмпла {i + 1} (CRF {crf}) завершился с ошибкой")
-            rc = _run_cmd(crf_select.measure_command(
+                    f"энкод сэмпла {i + 1} (CRF {crf}): "
+                    f"{_last_error_line(err)}")
+            rc, err = _run_cmd(crf_select.measure_command(
                 enc_path, video_path, ss, dur, workdir, model_path))
             if rc != 0:
                 raise _AutoselectError(
-                    f"замер метрик сэмпла {i + 1} (CRF {crf}) завершился с ошибкой")
+                    f"замер метрик сэмпла {i + 1} (CRF {crf}): "
+                    f"{_last_error_line(err)}")
             psnr = crf_select.parse_psnr_log(_read_file(os.path.join(workdir, "p.log")))
             ssim = crf_select.parse_ssim_log(_read_file(os.path.join(workdir, "s.log")))
             vmaf_pair = crf_select.parse_vmaf_json(os.path.join(workdir, "v.json"))
