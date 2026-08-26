@@ -120,6 +120,23 @@ def parse_vmaf_json(path):
         return None
 
 
+def _esc_fg(path):
+    """Escape a path for use INSIDE a -filter_complex string.
+
+    , ; [ ] and quotes are filtergraph syntax (link labels / option
+    separators), so a raw path containing them breaks the parse (e.g. an
+    episode dir "Show S03 [Group]" -> Trailing garbage after a filter).
+    Backslash and single quote are escaped first; spaces are legal
+    unescaped inside a filtergraph argument (verified vs ffmpeg 9.0.1 +
+    libvmaf: escaped -> rc 0 + v.json, unescaped -> parse error). argv
+    inputs (-i) are NOT escaped - the OS handles them, not the parser.
+    """
+    s = path.replace("\\", "\\\\").replace("'", "\\'")
+    for c in (",", ";", "[", "]"):
+        s = s.replace(c, "\\" + c)
+    return s
+
+
 def sample_encode_command(video_path, ss, dur, out_path, video_config_args,
                           crf, x265_params=None):
     """argv ffmpeg: клип dur сек с позиции ss, закодированный при данном CRF.
@@ -143,15 +160,18 @@ def measure_command(enc_path, ref_path, ss, dur, workdir, model_path):
     Окно референса вырезается из оригинала тем же -ss/-t (точный input
     seek) — пиксельно совпадает с сэмплом. Замер всегда в полном
     разрешении (subsample не используется: он экономит секунды замера
-    при десятках секунд энкода).
+    при десятках секунд энкода). Пути внутри filter_complex
+    экранируются (_esc_fg) — спецсимволы ,;[]" ломают парсер.
     """
+    ew = _esc_fg(workdir)
+    em = _esc_fg(model_path)
     fc = (
         "[0:v]setpts=PTS-STARTPTS,split=3[d0][d1][d2];"
         "[1:v]setpts=PTS-STARTPTS,split=3[r0][r1][r2];"
-        f"[d0][r0]psnr=stats_file={workdir}/p.log[n0];"
-        f"[d1][r1]ssim=stats_file={workdir}/s.log[n1];"
-        f"[d2][r2]libvmaf=model=path={model_path}:log_fmt=json:"
-        f"log_path={workdir}/v.json[n2]"
+        f"[d0][r0]psnr=stats_file={ew}/p.log[n0];"
+        f"[d1][r1]ssim=stats_file={ew}/s.log[n1];"
+        f"[d2][r2]libvmaf=model=path={em}:log_fmt=json:"
+        f"log_path={ew}/v.json[n2]"
     )
     return ["ffmpeg", "-hide_banner", "-loglevel", "error",
             "-i", enc_path,

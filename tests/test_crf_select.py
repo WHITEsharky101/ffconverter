@@ -204,6 +204,27 @@ class MeasureCommandTest(unittest.TestCase):
         i = cmd.index("-ss")
         self.assertEqual(cmd[i:i + 2], ["-ss", "17.5"])
 
+    def test_special_chars_in_paths_are_escaped(self):
+        # 2026-08-26 user run: episode dir "Mushoku Tensei S03
+        # [Дубляжная, AniStar]" — [ ] and , are filtergraph syntax, so the
+        # raw path in -filter_complex breaks the parse ("Trailing garbage
+        # after a filter"). Paths inside the filtergraph must be escaped;
+        # argv inputs (-i) stay raw (verified against real ffmpeg 9.0.1 +
+        # libvmaf: escaped -> rc 0 + v.json, unescaped -> parse error).
+        w = "/d/Show S03 [Дубляжная, AniStar]/.tmp"
+        m = "/d/vmaf/vmaf_v0.6.1.json"
+        cmd = cs.measure_command("/e.mp4", "/v.mp4", 30.0, 5, w, m)
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn(
+            r"stats_file=/d/Show S03 \[Дубляжная\, AniStar\]/.tmp/p.log[n0]", fc)
+        self.assertIn(
+            r"log_path=/d/Show S03 \[Дубляжная\, AniStar\]/.tmp/v.json[n2]", fc)
+        # raw (unescaped) path must NOT appear inside the filtergraph
+        self.assertNotIn("stats_file=/d/Show S03 [", fc)
+        # argv inputs are passed to the OS, not the filtergraph parser
+        self.assertIn("/e.mp4", cmd)
+        self.assertNotIn("\\", cmd[cmd.index("-i") + 1])
+
 
 if __name__ == "__main__":
     unittest.main()
