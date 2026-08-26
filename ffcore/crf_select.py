@@ -123,18 +123,39 @@ def parse_vmaf_json(path):
 def _esc_fg(path):
     """Escape a path for use INSIDE a -filter_complex string.
 
-    , ; [ ] and quotes are filtergraph syntax (link labels / option
-    separators), so a raw path containing them breaks the parse (e.g. an
-    episode dir "Show S03 [Group]" -> Trailing garbage after a filter).
-    Backslash and single quote are escaped first; spaces are legal
-    unescaped inside a filtergraph argument (verified vs ffmpeg 9.0.1 +
-    libvmaf: escaped -> rc 0 + v.json, unescaped -> parse error). argv
-    inputs (-i) are NOT escaped - the OS handles them, not the parser.
+    The option value passes through two av_get_token unescape layers
+    (the filtergraph line parser, then the option-value parser whose
+    pairs_sep is the colon), so each special char needs a specific number
+    of backslashes in the raw filter string to survive both layers:
+
+        backslash  -> 4 backslashes (literal backslash, e.g. C:\\Media)
+        colon      -> 2 backslashes (":" is the option pairs separator)
+        quote      -> 3 backslashes (quoting char)
+        ,  ;       -> 1 backslash (filter / option separators)
+        [  ]       -> 1 backslash (link-label syntax)
+        everything else (space, double quote, alnum, non-ASCII) -> as-is
+
+    Each count is the MINIMAL one that makes the stats file land in the
+    correctly-named directory, verified empirically against ffmpeg 7.1
+    (libvmaf run in docker ffmpeg 9.0.1), including adjacency cases where
+    a colon and a backslash are contiguous (Windows "C:\\Media\\...").
+    argv inputs (-i) are NOT escaped - the OS handles them, not the
+    filtergraph parser.
     """
-    s = path.replace("\\", "\\\\").replace("'", "\\'")
-    for c in (",", ";", "[", "]"):
-        s = s.replace(c, "\\" + c)
-    return s
+    one = chr(92)  # single backslash; avoids literal-escape ambiguity
+    out = []
+    for c in path:
+        if c == one:
+            out.append(one * 4)       # literal backslash
+        elif c == ":":
+            out.append(one * 2 + ":")  # option pairs separator
+        elif c == "'":
+            out.append(one * 3 + "'")  # quoting char
+        elif c in (",", ";", "[", "]"):
+            out.append(one + c)       # filtergraph syntax
+        else:
+            out.append(c)             # legal unescaped in a filter arg
+    return "".join(out)
 
 
 def sample_encode_command(video_path, ss, dur, out_path, video_config_args,

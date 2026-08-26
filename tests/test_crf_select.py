@@ -225,6 +225,32 @@ class MeasureCommandTest(unittest.TestCase):
         self.assertIn("/e.mp4", cmd)
         self.assertNotIn("\\", cmd[cmd.index("-i") + 1])
 
+    def test_windows_style_path_is_escaped_for_filtergraph(self):
+        # Independent review (2026-08-26): the option value passes through
+        # TWO av_get_token unescape layers, so the minimal backslash counts
+        # differ per char (verified empirically, ffmpeg 7.1 + 9.0.1):
+        #   backslash -> 4, colon -> 2, quote -> 3, ,;[] -> 1, rest -> 0.
+        # The old scheme (2 for backslash, 0 for colon, 1 for quote) broke
+        # every Windows drive-letter path in -filter_complex parsing.
+        w = "C:" + chr(92) + "My " + chr(39) + "Shows" + chr(92) + "S01 [Ani, Dub]" + chr(92) + ".tmp"
+        m = "C:" + chr(92) + "vmaf" + chr(92) + "vmaf_v0.6.1.json"
+        cmd = cs.measure_command("/e.mp4", "/v.mp4", 30.0, 5, w, m)
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        BS = chr(92)
+        # backslash -> 4, colon -> 2, quote -> 3, [ ] , -> 1 each
+        self.assertIn(
+            "stats_file=" + "C" + BS * 2 + ":" + BS * 4 + "My " + BS * 3 + "'" +
+            "Shows" + BS * 4 + "S01 " + BS + "[Ani" + BS + ", Dub" + BS + "]" +
+            BS * 4 + ".tmp/p.log[n0]",
+            fc)
+        self.assertIn(
+            "model=path=" + "C" + BS * 2 + ":" + BS * 4 + "vmaf" + BS * 4 +
+            "vmaf_v0.6.1.json:log_fmt=json",
+            fc)
+        # argv inputs are passed to the OS, not the filtergraph parser
+        self.assertIn("/e.mp4", cmd)
+        self.assertNotIn(BS, cmd[cmd.index("-i") + 1])
+
 
 if __name__ == "__main__":
     unittest.main()
