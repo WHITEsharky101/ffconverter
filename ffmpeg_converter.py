@@ -178,13 +178,18 @@ def _read_file(path):
 
 
 def probe_video_info(video_path):
-    """(duration, width) первого видео-стрима; None при ошибке.
+    """(duration, width, rate) первого видео-стрима; None при ошибке.
 
     Длительность берётся со stream-уровня; если его нет (MKV/Matroska
     не кладёт stream-длительность) — с format-уровня.
+
+    rate — avg_frame_rate (например "24000/1001") для нормализации
+    fps= в замере метрик (timebase desync); None, если его нет или он
+    нерабочий (0/0, мусор) — замер тогда идёт без нормализации.
     """
     command = ["ffprobe", "-v", "error", "-select_streams", "v:0",
-               "-show_entries", "stream=duration,width:format=duration",
+               "-show_entries",
+               "stream=duration,width,avg_frame_rate:format=duration",
                "-of", "json", video_path]
     try:
         result = subprocess.run(command, stdout=subprocess.PIPE,
@@ -200,9 +205,27 @@ def probe_video_info(video_path):
             raw = data.get("format", {}).get("duration")
         if raw in (None, ""):
             return None
-        return float(raw), width
+        return float(raw), width, _frame_rate(stream.get("avg_frame_rate"))
     except (OSError, ValueError, KeyError, IndexError, TypeError):
         return None
+
+
+def _frame_rate(raw):
+    """avg_frame_rate ("24000/1001") в fps-формат; None, если не годится.
+
+    ffmpeg принимает "24000/1001" и целые числа; 0/0, дробный/пустой
+    ответ ffprobe нормализации не дают — замер тогда без fps=.
+    """
+    if not raw:
+        return None
+    try:
+        num, _, den = str(raw).partition("/")
+        n, d = int(num), int(den or 0)
+    except ValueError:
+        return None
+    if n <= 0 or d <= 0:
+        return None
+    return f"{n}/{d}" if d != 1 else str(n)
 
 
 def run_autoselect_crf(params):
@@ -233,7 +256,7 @@ def run_autoselect_crf(params):
     if info is None:
         print("Не удалось определить длительность видео — введите CRF вручную.")
         return None
-    duration, width = info
+    duration, width, rate = info
     points = crf_select.sample_points(duration)
     if not points:
         print("Эпизод слишком короткий для подбора — введите CRF вручную.")
@@ -259,7 +282,7 @@ def run_autoselect_crf(params):
     enc_args = video_config.split()
     try:
         return _autoselect_search(video_path, points, workdir, model_path,
-                                  enc_args)
+                                  enc_args, rate)
     except _AutoselectError as e:
         print(f"Ошибка автоподбора CRF: {e}")
         return None
@@ -270,7 +293,8 @@ def run_autoselect_crf(params):
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def _autoselect_search(video_path, points, workdir, model_path, enc_args):
+def _autoselect_search(video_path, points, workdir, model_path, enc_args,
+                       rate=None):
     """Бинарный поиск + таблица метрик; выбранный CRF или None."""
 
     def evaluate(crf):
@@ -284,7 +308,7 @@ def _autoselect_search(video_path, points, workdir, model_path, enc_args):
                     f"энкод сэмпла {i + 1} (CRF {crf}): "
                     f"{_last_error_line(err)}")
             rc, err = _run_cmd(crf_select.measure_command(
-                enc_path, video_path, ss, dur, workdir, model_path))
+                enc_path, video_path, ss, dur, workdir, model_path, rate))
             if rc != 0:
                 raise _AutoselectError(
                     f"замер метрик сэмпла {i + 1} (CRF {crf}): "

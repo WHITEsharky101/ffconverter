@@ -175,7 +175,8 @@ def sample_encode_command(video_path, ss, dur, out_path, video_config_args,
     return cmd
 
 
-def measure_command(enc_path, ref_path, ss, dur, workdir, model_path):
+def measure_command(enc_path, ref_path, ss, dur, workdir, model_path,
+                    rate=None):
     """argv ffmpeg: PSNR+SSIM+VMAF клипа enc против окна оригинала.
 
     Окно референса вырезается из оригинала тем же -ss/-t (точный input
@@ -183,12 +184,21 @@ def measure_command(enc_path, ref_path, ss, dur, workdir, model_path):
     разрешении (subsample не используется: он экономит секунды замера
     при десятках секунд энкода). Пути внутри filter_complex
     экранируются (_esc_fg) — спецсимволы ,;[]" ломают парсер.
+
+    rate (avg_frame_rate из пробы источника, напр. "24000/1001") —
+    нормализует ОБЕ ветви в строгую CFR-сетку (fps=<rate>): без неё
+    несовпадение timebase контейнеров (MP4 1/24000 vs MKV 1/1000)
+    сдвигает pairing кадров enc/ref — VMAF-провалы/нули и
+    «not matching timebases … results may be incorrect». None —
+    фильтр без нормализации (fallback, если проба не дала rate).
     """
     ew = _esc_fg(workdir)
     em = _esc_fg(model_path)
+    branch = (f"setpts=PTS-STARTPTS,fps={rate},split=3" if rate
+              else "setpts=PTS-STARTPTS,split=3")
     fc = (
-        "[0:v]setpts=PTS-STARTPTS,split=3[d0][d1][d2];"
-        "[1:v]setpts=PTS-STARTPTS,split=3[r0][r1][r2];"
+        f"[0:v]{branch}[d0][d1][d2];"
+        f"[1:v]{branch}[r0][r1][r2];"
         f"[d0][r0]psnr=stats_file={ew}/p.log[n0];"
         f"[d1][r1]ssim=stats_file={ew}/s.log[n1];"
         f"[d2][r2]libvmaf=model=path={em}:log_fmt=json:"

@@ -64,9 +64,11 @@ class FakeFfmpeg:
     """
 
     def __init__(self, duration=75.0, width=1920, vmaf_for=None,
-                 measure_rc=0, measure_stderr="", has_vmaf=True):
+                 measure_rc=0, measure_stderr="", has_vmaf=True,
+                 avg_frame_rate="24000/1001"):
         self.duration = duration
         self.width = width
+        self.avg_frame_rate = avg_frame_rate
         # crf -> vmaf (callables) or None (default 97.0)
         self.vmaf_for = vmaf_for
         self.measure_rc = measure_rc
@@ -79,7 +81,8 @@ class FakeFfmpeg:
         self.calls.append(cmd)
         if cmd[0] == "ffprobe":
             return self._result(0, out=json.dumps({"streams": [{
-                "duration": str(self.duration), "width": self.width}]}))
+                "duration": str(self.duration), "width": self.width,
+                "avg_frame_rate": self.avg_frame_rate}]}))
         if cmd[0] == "ffmpeg":
             if "-filters" in cmd:
                 return self._result(0, out=self._filters_out())
@@ -159,8 +162,10 @@ class ProbeVideoInfoTest(unittest.TestCase):
             return ffmpeg_converter.probe_video_info("/v.mp4")
 
     def test_ok(self):
-        out = json.dumps({"streams": [{"duration": "75.2", "width": 1920}]})
-        self.assertEqual(self.probe(out=out), (75.2, 1920))
+        out = json.dumps({"streams": [{
+            "duration": "75.2", "width": 1920,
+            "avg_frame_rate": "24000/1001"}]})
+        self.assertEqual(self.probe(out=out), (75.2, 1920, "24000/1001"))
 
     def test_nonzero_rc(self):
         self.assertIsNone(self.probe(rc=1))
@@ -183,10 +188,40 @@ class ProbeVideoInfoTest(unittest.TestCase):
         with mock.patch.object(ffmpeg_converter.subprocess, "run",
                                fake) as run_mock:
             result = ffmpeg_converter.probe_video_info("/v.mkv")
-        self.assertEqual(result, (1420.053, 1920))
+        self.assertEqual(result, (1420.053, 1920, None))
         # single ffprobe call covering both levels
         command = run_mock.call_args[0][0]
-        self.assertIn("stream=duration,width:format=duration", command)
+        self.assertIn("stream=duration,width,avg_frame_rate"
+                      ":format=duration", command)
+
+    def test_probe_requests_avg_frame_rate(self):
+        # fps=<rate> normalization needs the source's avg_frame_rate
+        # (2026-08-26 timebase desync fix)
+        out = json.dumps({"streams": [{
+            "duration": "75.2", "width": 1920,
+            "avg_frame_rate": "24000/1001"}]})
+        fake = mock.Mock(return_value=types.SimpleNamespace(
+            returncode=0, stdout=out, stderr=""))
+        with mock.patch.object(ffmpeg_converter.subprocess, "run",
+                               fake) as run_mock:
+            ffmpeg_converter.probe_video_info("/v.mp4")
+        command = run_mock.call_args[0][0]
+        self.assertIn("stream=duration,width,avg_frame_rate"
+                      ":format=duration", command)
+
+    def test_avg_frame_rate_missing_yields_none_rate(self):
+        # stream has no avg_frame_rate -> None (measure_command falls
+        # back to the un-normalized filtergraph)
+        out = json.dumps({"streams": [{
+            "duration": "75.2", "width": 1920}]})
+        self.assertEqual(self.probe(out=out), (75.2, 1920, None))
+
+    def test_avg_frame_rate_zero_yields_none_rate(self):
+        # avg_frame_rate 0/0 (ffprobe before full parse) -> unusable -> None
+        out = json.dumps({"streams": [{
+            "duration": "75.2", "width": 1920,
+            "avg_frame_rate": "0/0"}]})
+        self.assertEqual(self.probe(out=out), (75.2, 1920, None))
 
 
 class AutoselectDriverTest(unittest.TestCase):
@@ -313,6 +348,37 @@ class AutoselectDriverTest(unittest.TestCase):
         self.assertIsNone(crf)
         self.assertIn("Ошибка автоподбора", out)
         self.assertFalse(os.path.exists(self.workdir))
+
+    def test_measure_command_gets_fps_normalization(self):
+        # 2026-08-26: probed avg_frame_rate must reach the measure
+        # filtergraph as fps=<rate> on BOTH branches (timebase desync
+        # fix, validated in docker: min 32.89 -> 91.57, warning gone).
+        fake = FakeFfmpeg(avg_frame_rate="24000/1001")
+        crf, _ = run_autoselect(self.params, fake)
+        self.assertEqual(crf, 19)
+        measures = [c for c in fake.calls
+                    if c[0] == "ffmpeg" and "-filter_complex" in c]
+        self.assertTrue(measures, "no measure command was run")
+        for cmd in measures:
+            fc = cmd[cmd.index("-filter_complex") + 1]
+            self.assertIn("[0:v]setpts=PTS-STARTPTS,fps=24000/1001,"
+                          "split=3", fc)
+            self.assertIn("[1:v]setpts=PTS-STARTPTS,fps=24000/1001,"
+                          "split=3", fc)
+
+    def test_measure_command_without_rate_when_probe_yields_none(self):
+        # probe with no avg_frame_rate -> rate None -> the old
+        # un-normalized filtergraph, run still succeeds
+        fake = FakeFfmpeg(avg_frame_rate=None)
+        crf, _ = run_autoselect(self.params, fake)
+        self.assertEqual(crf, 19)
+        measures = [c for c in fake.calls
+                    if c[0] == "ffmpeg" and "-filter_complex" in c]
+        for cmd in measures:
+            fc = cmd[cmd.index("-filter_complex") + 1]
+            self.assertNotIn("fps=", fc)
+            self.assertIn("[0:v]setpts=PTS-STARTPTS,split=3", fc)
+            self.assertIn("[1:v]setpts=PTS-STARTPTS,split=3", fc)
 
 
 class CollectInputsTest(unittest.TestCase):

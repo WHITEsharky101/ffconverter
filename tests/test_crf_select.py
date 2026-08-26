@@ -251,6 +251,30 @@ class MeasureCommandTest(unittest.TestCase):
         self.assertIn("/e.mp4", cmd)
         self.assertNotIn(BS, cmd[cmd.index("-i") + 1])
 
+    def test_fps_normalization_when_rate_given(self):
+        # 2026-08-26: container timebase mismatch (MP4 1/24000 vs MKV
+        # 1/1000) desyncs the enc/ref frame pairing -> VMAF dips/zeros +
+        # "not matching timebases ... results may be incorrect".
+        # Normalizing BOTH branches to a strict CFR grid (fps=<rate>,
+        # rate = probed avg_frame_rate) removes the dip and the warning
+        # (validated in docker ffmpeg 9.0.1: min 32.89 -> 91.57).
+        cmd = cs.measure_command("/w/enc.mp4", "/m/v.mp4", 30.0, 5, "/w",
+                                 "/repo/vmaf/vmaf_v0.6.1.json",
+                                 rate="24000/1001")
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn("[0:v]setpts=PTS-STARTPTS,fps=24000/1001,split=3", fc)
+        self.assertIn("[1:v]setpts=PTS-STARTPTS,fps=24000/1001,split=3", fc)
+
+    def test_no_fps_filter_when_rate_none(self):
+        # probe did not yield avg_frame_rate (missing/garbage) -> the old
+        # filtergraph, no fps=, no crash (fallback).
+        cmd = cs.measure_command("/w/enc.mp4", "/m/v.mp4", 30.0, 5, "/w",
+                                 "/repo/vmaf/vmaf_v0.6.1.json")
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        self.assertNotIn("fps=", fc)
+        self.assertIn("[0:v]setpts=PTS-STARTPTS,split=3", fc)
+        self.assertIn("[1:v]setpts=PTS-STARTPTS,split=3", fc)
+
 
 if __name__ == "__main__":
     unittest.main()
