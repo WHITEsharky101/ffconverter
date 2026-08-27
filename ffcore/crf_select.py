@@ -9,6 +9,12 @@ User-mandated parameters (2026-08-24):
   * gates: PSNR >= 50 AND SSIM >= 0.98 AND VMAF >= 96 (per sample)
   * 3 samples: head (30 s from start, 0 when the episode is short),
     middle, tail (30 s before the end); 5 s each
+
+Storage (2026-08-27): the driver keeps the `.crf_select/` workdir after
+the run (forensics) and wipes it at the start of the next one; every
+(CRF, sample) pair gets its own `c{crf}_s{i}/` subdirectory holding the
+encoded clip and its p.log/s.log/v.json, so the full metric matrix of
+the last run survives on disk.
 """
 import json
 import re
@@ -176,7 +182,7 @@ def sample_encode_command(video_path, ss, dur, out_path, video_config_args,
 
 
 def measure_command(enc_path, ref_path, ss, dur, workdir, model_path,
-                    rate=None):
+                    rate=None, sample_dir=None):
     """argv ffmpeg: PSNR+SSIM+VMAF клипа enc против окна оригинала.
 
     Окно референса вырезается из оригинала тем же -ss/-t (точный input
@@ -191,8 +197,13 @@ def measure_command(enc_path, ref_path, ss, dur, workdir, model_path,
     сдвигает pairing кадров enc/ref — VMAF-провалы/нули и
     «not matching timebases … results may be incorrect». None —
     фильтр без нормализации (fallback, если проба не дала rate).
+
+    sample_dir (2026-08-27) — каталог c{crf}_s{i}/ этого сэмпла: туда
+    пишутся p.log/s.log/v.json (ранее все сэмпл/CRF затирали общие
+    файлы в workdir). None — legacy: логи прямо в workdir.
     """
-    ew = _esc_fg(workdir)
+    logdir = sample_dir if sample_dir else workdir
+    ew = _esc_fg(logdir)
     em = _esc_fg(model_path)
     branch = (f"setpts=PTS-STARTPTS,fps={rate},split=3" if rate
               else "setpts=PTS-STARTPTS,split=3")

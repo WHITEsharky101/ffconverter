@@ -234,7 +234,9 @@ def run_autoselect_crf(params):
     Бинарный поиск CRF [14, 19] на 3 сэмплах (начало+30с / середина /
     конец-30с) первого выбранного эпизода; пороги PSNR≥50 ∧ SSIM≥0.98 ∧
     VMAF≥96 на каждый сэмпл. Возвращает int CRF или None (фолбэк на ручной
-    ввод). Сэмплы живут в скрытой .crf_select/ и удаляются в finally.
+    ввод). Рабочий каталог .crf_select/ СОХРАНЯЕТСЯ после запуска (логи
+    метрик каждого сэмпла — в c{crf}_s{i}/) и очищается при старте
+    следующего автоподбора.
     """
     episodes = list(params.episodes)
     season = params.season
@@ -274,23 +276,33 @@ def run_autoselect_crf(params):
 
     workdir = os.path.join(params.path, ".crf_select")
     if os.path.exists(workdir):
-        shutil.rmtree(workdir)
-    os.makedirs(workdir)
+        try:
+            shutil.rmtree(workdir)
+        except OSError as e:
+            # Non-fatal: a half-wiped folder leaves only files that the
+            # new per-sample dirs overwrite anyway; root-level leftovers
+            # are no longer read by the driver.
+            print(f"Не удалось полностью очистить старую папку "
+                  f".crf_select ({e}) — новые логи могут соседствовать "
+                  f"с остатками предыдущего запуска.")
+    os.makedirs(workdir, exist_ok=True)
     video_config = generate_ffmpeg_video_config(params.codec, params.bit)
     if params.tune_preset:
         video_config += f" -tune {params.tune_preset}"
     enc_args = video_config.split()
     try:
-        return _autoselect_search(video_path, points, workdir, model_path,
-                                  enc_args, rate)
+        result = _autoselect_search(video_path, points, workdir, model_path,
+                                    enc_args, rate)
+        print(f"Логи метрик сэмплов: {workdir}")
+        return result
     except _AutoselectError as e:
         print(f"Ошибка автоподбора CRF: {e}")
+        print(f"Частичные логи метрик сэмплов: {workdir}")
         return None
     except Exception as e:  # noqa: BLE001 — любой сбой → ручной ввод
         print(f"Ошибка автоподбора CRF: {e}")
+        print(f"Частичные логи метрик сэмплов: {workdir}")
         return None
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def _autoselect_search(video_path, points, workdir, model_path, enc_args,
@@ -300,7 +312,9 @@ def _autoselect_search(video_path, points, workdir, model_path, enc_args,
     def evaluate(crf):
         sample_metrics = []
         for i, (ss, dur) in enumerate(points):
-            enc_path = os.path.join(workdir, f"enc_c{crf}_{i}.mp4")
+            sample_dir = os.path.join(workdir, f"c{crf}_s{i}")
+            os.makedirs(sample_dir, exist_ok=True)
+            enc_path = os.path.join(sample_dir, f"enc_c{crf}_{i}.mp4")
             rc, err = _run_cmd(crf_select.sample_encode_command(
                 video_path, ss, dur, enc_path, enc_args, crf, X265_PARAMS))
             if rc != 0:
@@ -308,14 +322,15 @@ def _autoselect_search(video_path, points, workdir, model_path, enc_args,
                     f"энкод сэмпла {i + 1} (CRF {crf}): "
                     f"{_last_error_line(err)}")
             rc, err = _run_cmd(crf_select.measure_command(
-                enc_path, video_path, ss, dur, workdir, model_path, rate))
+                enc_path, video_path, ss, dur, workdir, model_path, rate,
+                sample_dir))
             if rc != 0:
                 raise _AutoselectError(
                     f"замер метрик сэмпла {i + 1} (CRF {crf}): "
                     f"{_last_error_line(err)}")
-            psnr = crf_select.parse_psnr_log(_read_file(os.path.join(workdir, "p.log")))
-            ssim = crf_select.parse_ssim_log(_read_file(os.path.join(workdir, "s.log")))
-            vmaf_pair = crf_select.parse_vmaf_json(os.path.join(workdir, "v.json"))
+            psnr = crf_select.parse_psnr_log(_read_file(os.path.join(sample_dir, "p.log")))
+            ssim = crf_select.parse_ssim_log(_read_file(os.path.join(sample_dir, "s.log")))
+            vmaf_pair = crf_select.parse_vmaf_json(os.path.join(sample_dir, "v.json"))
             if psnr is None or ssim is None or vmaf_pair is None:
                 raise _AutoselectError(
                     f"не удалось разобрать метрики сэмпла {i + 1} (CRF {crf})")

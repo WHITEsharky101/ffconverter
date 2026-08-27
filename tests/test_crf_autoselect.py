@@ -236,8 +236,13 @@ class AutoselectDriverTest(unittest.TestCase):
         crf, out = run_autoselect(self.params, fake)
         self.assertEqual(crf, 19)
         self.assertIn("Выбранный CRF: 19", out)
-        self.assertFalse(os.path.exists(self.workdir),
-                         ".crf_select must be removed after the run")
+        # 2026-08-27: .crf_select is KEPT for forensics; the last
+        # evaluated CRF's sample-0 metrics must be on disk
+        self.assertTrue(os.path.exists(self.workdir),
+                        ".crf_select is kept after the run (forensics)")
+        self.assertTrue(os.path.isfile(
+            os.path.join(self.workdir, "c19_s0", "p.log")),
+                        "sample metrics must survive under c19_s0/")
         # bisection: at most 5 encode rounds
         encodes = [c for c in fake.calls if "-x265-params" in c]
         self.assertLessEqual(len(encodes) // 3, 5)
@@ -330,7 +335,10 @@ class AutoselectDriverTest(unittest.TestCase):
         self.assertIsNone(crf)
         self.assertIn("VMAF-модель", out)
 
-    def test_workdir_cleaned_on_error(self):
+    def test_workdir_kept_on_error(self):
+        # 2026-08-27: .crf_select survives ANY outcome (success, fallback,
+        # crash) — the last run's metrics are forensics material; the next
+        # autoselect wipes the folder at its start.
         fake = FakeFfmpeg()
 
         def boom_run(cmd, **kw):
@@ -347,7 +355,65 @@ class AutoselectDriverTest(unittest.TestCase):
                                   FakeSubprocess(boom_run, boom_popen))
         self.assertIsNone(crf)
         self.assertIn("Ошибка автоподбора", out)
-        self.assertFalse(os.path.exists(self.workdir))
+        self.assertTrue(os.path.exists(self.workdir),
+                        "crash mid-run must not delete the sample dir")
+        self.assertTrue(os.path.isdir(
+            os.path.join(self.workdir, "c14_s0")),
+                        "the started sample dir must remain")
+
+    def test_stale_workdir_is_wiped_at_start(self):
+        # 2026-08-27: a leftover .crf_select from an older run (e.g. the
+        # old flat layout, or an interrupted run) must not mix into the
+        # new run's metric matrix
+        os.makedirs(os.path.join(self.workdir, "c14_s0"), exist_ok=True)
+        with open(os.path.join(self.workdir, "c14_s0", "p.log"), "w") as f:
+            f.write("SENTINEL-STALE-LOG")
+        with open(os.path.join(self.workdir, "stale_root_marker.txt"), "w") as f:
+            f.write("stale")
+        fake = FakeFfmpeg()
+        crf, out = run_autoselect(self.params, fake)
+        self.assertEqual(crf, 19)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.workdir, "stale_root_marker.txt")),
+            "stale root-level files must be wiped at the start")
+        with open(os.path.join(self.workdir, "c14_s0", "p.log")) as f:
+            self.assertNotEqual(f.read(), "SENTINEL-STALE-LOG",
+                                "stale sample log must be replaced by the "
+                                "fresh measurement")
+
+    def test_failed_run_prints_forensics_location(self):
+        # 2026-08-27: on a failed autoselect the user must learn WHERE the
+        # partial metrics survived (the folder is kept)
+        fake = FakeFfmpeg()
+
+        def boom_run(cmd, **kw):
+            if cmd[0] == "ffmpeg" and "-x265-params" in cmd:
+                raise OSError("disk full")
+            return fake.run(cmd, **kw)
+
+        def boom_popen(cmd, **kw):
+            if "-x265-params" in cmd:
+                raise OSError("disk full")
+            return fake.popen(cmd, **kw)
+
+        crf, out = run_autoselect(self.params,
+                                  FakeSubprocess(boom_run, boom_popen))
+        self.assertIsNone(crf)
+        self.assertIn(self.workdir, out,
+                      "failed run must point at the kept forensics folder")
+
+    def test_wipe_failure_does_not_abort_run(self):
+        # 2026-08-27: the start-of-run wipe must be non-fatal — if rmtree
+        # fails (busy files, RO share) the run proceeds with a warning
+        os.makedirs(self.workdir, exist_ok=True)
+        fake = FakeFfmpeg()
+        with mock.patch.object(ffmpeg_converter.shutil, "rmtree",
+                               side_effect=OSError("device busy")):
+            crf, out = run_autoselect(self.params, fake)
+        self.assertEqual(crf, 19)
+        self.assertIn("очистить", out)
+        self.assertTrue(os.path.isfile(
+            os.path.join(self.workdir, "c19_s0", "p.log")))
 
     def test_measure_command_gets_fps_normalization(self):
         # 2026-08-26: probed avg_frame_rate must reach the measure
@@ -379,6 +445,32 @@ class AutoselectDriverTest(unittest.TestCase):
             self.assertNotIn("fps=", fc)
             self.assertIn("[0:v]setpts=PTS-STARTPTS,split=3", fc)
             self.assertIn("[1:v]setpts=PTS-STARTPTS,split=3", fc)
+
+    def test_sample_logs_per_sample_dirs(self):
+        # every measure writes p.log/s.log/v.json into the SAME c{crf}_s{i}/
+        # dir as its encoded clip — no cross-sample overwrite (2026-08-27)
+        fake = FakeFfmpeg()
+        crf, _ = run_autoselect(self.params, fake)
+        self.assertEqual(crf, 19)
+        encodes = [c for c in fake.calls if "-x265-params" in c]
+        measures = [c for c in fake.calls
+                    if c[0] == "ffmpeg" and "-filter_complex" in c]
+        self.assertEqual(len(encodes), len(measures))
+        seen = {}
+        for enc, m in zip(encodes, measures):
+            crf_n = int(enc[enc.index("-crf") + 1])
+            enc_out = enc[enc.index("-f") + 2]  # -f mp4 <out> -y
+            sample_dir = os.path.dirname(enc_out)
+            seen[crf_n] = seen.get(crf_n, 0)
+            # sample index is per-CRF (0..2), not global
+            self.assertEqual(os.path.basename(sample_dir),
+                             f"c{crf_n}_s{seen[crf_n]}")
+            seen[crf_n] += 1
+            fc = m[m.index("-filter_complex") + 1]
+            plog = fc.split("psnr=stats_file=")[1].split("[")[0]
+            vlog = fc.split("log_path=")[1].split("[")[0]
+            self.assertEqual(os.path.dirname(plog), sample_dir)
+            self.assertEqual(os.path.dirname(vlog), sample_dir)
 
 
 class CollectInputsTest(unittest.TestCase):

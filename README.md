@@ -122,7 +122,19 @@ Choosing `1` at the CRF question starts the metric-based selection:
 - The VMAF model is auto-selected by width: `vmaf_v0.6.1.json` (1080p) or
   `vmaf_4k_v0.6.1.json` (≥ 3840 px). Models ship in the repo under `vmaf/`.
 - Working files live in a hidden `.crf_select/` folder inside the season
-  folder and are removed afterwards (in a `finally`, even on error).
+  folder and are **kept** afterwards (the next autoselect wipes them at
+  its start). Every (CRF, sample) pair gets its own `c{crf}_s{i}/`
+  subdirectory, so the full metric matrix of the last run survives for
+  inspection:
+
+  ```
+  .crf_select/
+  ├── c17_s0/  enc_c17_0.mp4  p.log  s.log  v.json
+  ├── c17_s1/  enc_c17_1.mp4  p.log  s.log  v.json
+  ├── c17_s2/  enc_c17_2.mp4  p.log  s.log  v.json
+  ├── c19_s0/  …
+  └── …
+  ```
 - If even CRF 14 fails all gates, you are asked whether to continue with
   CRF 14.
 - Any failure (no libvmaf in your ffmpeg, episode too short, missing model,

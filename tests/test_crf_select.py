@@ -177,16 +177,17 @@ class SampleEncodeCommandTest(unittest.TestCase):
 class MeasureCommandTest(unittest.TestCase):
     def cmd(self):
         return cs.measure_command("/w/enc.mp4", "/m/v.mp4", 30.0, 5, "/w",
-                                  "/repo/vmaf/vmaf_v0.6.1.json")
+                                  "/repo/vmaf/vmaf_v0.6.1.json",
+                                  sample_dir="/w/c17/s0")
 
     def test_splits_and_three_metrics(self):
         cmd = self.cmd()
         fc = cmd[cmd.index("-filter_complex") + 1]
         self.assertIn("split=3", fc)
-        self.assertIn("psnr=stats_file=/w/p.log[n0]", fc)
-        self.assertIn("ssim=stats_file=/w/s.log[n1]", fc)
+        self.assertIn("psnr=stats_file=/w/c17/s0/p.log[n0]", fc)
+        self.assertIn("ssim=stats_file=/w/c17/s0/s.log[n1]", fc)
         self.assertIn("libvmaf=model=path=/repo/vmaf/vmaf_v0.6.1.json", fc)
-        self.assertIn("log_fmt=json:log_path=/w/v.json", fc)
+        self.assertIn("log_fmt=json:log_path=/w/c17/s0/v.json", fc)
         # encoded clip (input 0) is taken whole; the reference window is cut
         # from the ORIGINAL (input 1) via -ss/-t placed before the second -i
         self.assertEqual(cmd[:6],
@@ -213,12 +214,13 @@ class MeasureCommandTest(unittest.TestCase):
         # libvmaf: escaped -> rc 0 + v.json, unescaped -> parse error).
         w = "/d/Show S03 [Дубляжная, AniStar]/.tmp"
         m = "/d/vmaf/vmaf_v0.6.1.json"
-        cmd = cs.measure_command("/e.mp4", "/v.mp4", 30.0, 5, w, m)
+        cmd = cs.measure_command("/e.mp4", "/v.mp4", 30.0, 5, w, m,
+                                 sample_dir=w + "/c15_s2")
         fc = cmd[cmd.index("-filter_complex") + 1]
         self.assertIn(
-            r"stats_file=/d/Show S03 \[Дубляжная\, AniStar\]/.tmp/p.log[n0]", fc)
+            r"stats_file=/d/Show S03 \[Дубляжная\, AniStar\]/.tmp/c15_s2/p.log[n0]", fc)
         self.assertIn(
-            r"log_path=/d/Show S03 \[Дубляжная\, AniStar\]/.tmp/v.json[n2]", fc)
+            r"log_path=/d/Show S03 \[Дубляжная\, AniStar\]/.tmp/c15_s2/v.json[n2]", fc)
         # raw (unescaped) path must NOT appear inside the filtergraph
         self.assertNotIn("stats_file=/d/Show S03 [", fc)
         # argv inputs are passed to the OS, not the filtergraph parser
@@ -234,14 +236,15 @@ class MeasureCommandTest(unittest.TestCase):
         # every Windows drive-letter path in -filter_complex parsing.
         w = "C:" + chr(92) + "My " + chr(39) + "Shows" + chr(92) + "S01 [Ani, Dub]" + chr(92) + ".tmp"
         m = "C:" + chr(92) + "vmaf" + chr(92) + "vmaf_v0.6.1.json"
-        cmd = cs.measure_command("/e.mp4", "/v.mp4", 30.0, 5, w, m)
+        cmd = cs.measure_command("/e.mp4", "/v.mp4", 30.0, 5, w, m,
+                                 sample_dir=w + "/c14_s1")
         fc = cmd[cmd.index("-filter_complex") + 1]
         BS = chr(92)
         # backslash -> 4, colon -> 2, quote -> 3, [ ] , -> 1 each
         self.assertIn(
             "stats_file=" + "C" + BS * 2 + ":" + BS * 4 + "My " + BS * 3 + "'" +
             "Shows" + BS * 4 + "S01 " + BS + "[Ani" + BS + ", Dub" + BS + "]" +
-            BS * 4 + ".tmp/p.log[n0]",
+            BS * 4 + ".tmp/c14_s1/p.log[n0]",
             fc)
         self.assertIn(
             "model=path=" + "C" + BS * 2 + ":" + BS * 4 + "vmaf" + BS * 4 +
@@ -274,6 +277,30 @@ class MeasureCommandTest(unittest.TestCase):
         self.assertNotIn("fps=", fc)
         self.assertIn("[0:v]setpts=PTS-STARTPTS,split=3", fc)
         self.assertIn("[1:v]setpts=PTS-STARTPTS,split=3", fc)
+
+
+class SampleDirTest(unittest.TestCase):
+    """Per-sample log storage (2026-08-27): each (CRF, sample) measure
+    writes its p.log/s.log/v.json into its own c{crf}_s{i}/ directory so
+    the last autoselect run's full metric matrix survives on disk."""
+
+    def test_logs_land_in_sample_dir(self):
+        cmd = cs.measure_command("/w/c17/s2/enc.mp4", "/m/v.mp4", 30.0, 5,
+                                 "/w", "/m/model.json",
+                                 sample_dir="/w/c17/s2")
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn("stats_file=/w/c17/s2/p.log[n0]", fc)
+        self.assertIn("stats_file=/w/c17/s2/s.log[n1]", fc)
+        self.assertIn("log_path=/w/c17/s2/v.json[n2]", fc)
+
+    def test_default_falls_back_to_workdir(self):
+        # no sample_dir -> legacy flat workdir layout (backward compat)
+        cmd = cs.measure_command("/w/enc.mp4", "/m/v.mp4", 30.0, 5, "/w",
+                                 "/m/model.json")
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn("stats_file=/w/p.log[n0]", fc)
+        self.assertIn("stats_file=/w/s.log[n1]", fc)
+        self.assertIn("log_path=/w/v.json[n2]", fc)
 
 
 if __name__ == "__main__":
