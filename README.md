@@ -32,19 +32,22 @@ defaults.
 
 ## Requirements
 
-- **Python 3.8+** (standard library + `rarfile` — the only external
-  dependency, used to extract `.rar` font archives)
-- **FFmpeg + FFprobe** with `libx265`, `libfdk_aac` and `libvmaf`
-  (e.g. the `jrottenberg/ffmpeg:latest` Docker image, ffmpeg 9.x), available
-  in PATH
+- **Docker** with the Compose plugin (the recommended way — see
+  [Docker Usage](#docker-usage-recommended)). The image ships the pinned
+  ffmpeg/ffprobe build, so the host needs nothing else.
+- Or, for a host install (no Docker): **Python 3.8+** (standard library +
+  `rarfile`) and an **FFmpeg + FFprobe** build with `libx265`, `libfdk_aac`
+  and `libvmaf` in PATH (e.g. `jrottenberg/ffmpeg`, ffmpeg 9.x).
 
 ## Installation
 
 ```bash
 git clone <repo-url>
 cd ffconverter
-pip install rarfile
 ```
+
+Docker: no further install — `docker compose run --rm ffconverter` builds the
+image on first use. Host install only: `pip install rarfile`.
 
 ## How a Run Works
 
@@ -174,37 +177,62 @@ Notes:
 - `aq-mode=3` is the anime AQ setting (banding in dark scenes); `row-mt=1`
   is a no-op in some x265 builds and harmless.
 
-## Docker Usage
+## Docker Usage (recommended)
 
-The base `jrottenberg/ffmpeg:latest` image ships **no Python**, so the
-converter itself must run in an environment that has both Python and
-ffmpeg/ffprobe. Two common setups:
+The recommended deployment runs the **whole converter inside the pinned ffmpeg
+image** — the driver and ffmpeg live in the same container, so CRF samples,
+VMAF measurements and the final encode always use the exact same ffmpeg
+build (no version drift, no host ffmpeg required):
 
-1. **Host install** — install FFmpeg (with libx265 + libvmaf) on the host
-   and run `python3 ffmpeg_converter.py` there.
-2. **Custom image** — derive from the official image and add Python:
+```bash
+git clone <repo-url>
+cd ffconverter
+docker compose run --rm ffconverter    # first start: config wizard, then conversion
+```
 
-   ```dockerfile
-   FROM jrottenberg/ffmpeg:latest
-   RUN apt-get update && apt-get install -y --no-install-recommends python3
-   ```
+`docker-compose.yml` builds the image from the local `Dockerfile`
+(`jrottenberg/ffmpeg:9.0-ubuntu2404` + Python 3 + `rarfile` + RARLAB `unrar`)
+and mounts:
 
-   ```bash
-   docker run --rm -it -v $(pwd):/work -w /work my-ffconverter python3 ffmpeg_converter.py
-   ```
+- `${MEDIA_PATH:-/mnt/media}:/data/media` — the media library as a **bind
+  mount** of the host directory where it lives (e.g. the SMB mount). The
+  host path is set per machine with `MEDIA_PATH=/your/mount docker compose
+  run …` or by editing `docker-compose.yml`. The media path the wizard asks
+  for is always `/data/media/...` regardless of the host path.
+- `ffconv_data:/code/data` — the runtime files (`convertlist.txt`,
+  `streams_data.json`, `settings.json`); the image ships symlinks
+  `/code/{convertlist.txt,streams_data.json,settings.json}` → `data/*`, so
+  they survive `docker compose run --rm`
 
-Notes for running FFmpeg directly in the official image:
+Subsequent starts reload `streams_data.json` (answer `y` at
+«Загрузить данные …?» to skip the wizard). Override the entrypoint for
+one-off commands:
 
-- The image entrypoint is `ffmpeg` itself. To run an arbitrary command use
-  `--entrypoint bash` and pass it via `-c`:
-  `docker run --rm --entrypoint bash jrottenberg/ffmpeg:latest -c "ffmpeg ..."`
-  (without the entrypoint override, `docker run … bash -c '…'` fails with
-  `Error opening output file bash`).
-- In ffmpeg 9.x the libvmaf model option is `model=path=<file>` (not
-  `model_path=`).
-- VMAF models are not in the image — mount the repo's `vmaf/` directory
-  (e.g. `-v ./vmaf:/models:ro`) and point the filter at
-  `model=path=/models/vmaf_v0.6.1.json`.
+```bash
+docker compose run --rm --entrypoint ffprobe ffconverter -version
+docker compose run --rm --entrypoint python3 ffconverter /code/create_ffmpeg_config.py
+```
+
+Notes:
+
+- The base image's entrypoint is `ffmpeg`; the project image overrides it
+  with `python3 /code/ffmpeg_converter.py`.
+- `PUID`/`PGID` are **not** honoured by this image (unlike the alpine tags) —
+  the container runs as root; harmless for the SMB share.
+- `unrar` (RARLAB) is required because anime libraries ship **solid** `.rar`
+  font archives, which `unrar-free` cannot extract.
+
+### Secondary: host install (no Docker)
+
+Run the driver directly on a host that has Python 3.8+ (`pip install
+rarfile`) and an ffmpeg/ffprobe build with `libx265` + `libvmaf` in PATH:
+
+```bash
+python3 ffmpeg_converter.py
+```
+
+This is only for environments without Docker; the Docker deployment is the
+canonical one.
 
 ## Project Structure
 
@@ -244,14 +272,15 @@ python3 -m unittest discover -s tests
 
 | Problem | Solution |
 |---------|----------|
-| `ffmpeg: command not found` | Put FFmpeg/FFprobe (libx265 + libvmaf builds) in PATH, or run in a custom Docker image |
-| `libvmaf not found` / VMAF parse error | Use an ffmpeg build with `--enable-libvmaf`; auto-select falls back to manual CRF |
-| No VMAF model in the Docker image | Mount `vmaf/` from the repo and use `model=path=/models/vmaf_v0.6.1.json` |
+| `ffmpeg: command not found` | Run via `docker compose run --rm ffconverter` (the image ships ffmpeg 9.0.1), or install FFmpeg (libx265 + libvmaf) on the host |
+| `libvmaf not found` / VMAF parse error | Use the Docker image (libvmaf included); auto-select falls back to manual CRF |
+| No VMAF model in the Docker image | The project image ships the models at `/code/vmaf` (the driver finds them next to the code); only the *base* `jrottenberg/ffmpeg` image lacks them |
 | `Unknown option "aq-mode"` | x265-only options must go in `-x265-params`, not top-level — already handled |
-| `Error opening output file bash` in Docker | The image entrypoint is `ffmpeg`; use `docker run --entrypoint bash <image> -c "ffmpeg ..."` |
+| `Error opening output file bash` in Docker | The *base* image's entrypoint is `ffmpeg`; the project image overrides it. For one-off commands in the base image use `--entrypoint bash … -c "ffmpeg ..."` |
 | `ModuleNotFoundError: rarfile` | `pip install rarfile` |
 | Episode not found | Files must match `<Name> S<NN>E<NN>.<ext>` (tags in brackets allowed) |
 | `Ошибка при загрузке данных` (ValueError/TypeError/KeyError) | Corrupt `streams_data.json` — the wizard re-runs automatically and re-saves a fresh file |
+| Re-encoding an episode whose `[HEVC]`/`[AV1]` output already sits in the season folder | The output lands in the same directory as the source (unless the season is a `.tmp/` folder), and candidate selection is *sorted-first* — `[HEVC]` sorts before the bare name, so ffmpeg gets the previous output as input (`… same as Input #0`). Delete the old `[HEVC]`/`[AV1]` file of that episode before re-encoding |
 | Slow conversion | Use a higher CRF or fewer episodes per run |
 
 ## License

@@ -1,0 +1,18 @@
+# Keep the image free of repo-only and runtime artifacts.
+.git/
+.gitignore
+plans/
+project_info/
+tests/
+templates/
+.venv/
+.idea/
+__pycache__/
+*.pyc
+convertlist.txt
+streams_data.json
+settings.json
+Dockerfile
+docker-compose.yml
+.dockerignore
+README.md

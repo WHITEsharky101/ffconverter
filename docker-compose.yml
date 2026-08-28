@@ -1,0 +1,37 @@
+# FFConverter deployment (Linux, docker compose v2).
+#
+# The media volume is a BIND MOUNT of the host directory where the media
+# library lives (here: the SMB mount /mnt/media). The driver runs inside the
+# container, so the media path the wizard asks for is /data/media — point it
+# at /data/media/... during setup, regardless of the host mount path.
+#
+# Runtime files (convertlist.txt, streams_data.json, settings.json) live in
+# the named volume `ffconv_data` mounted at /code/data; the image ships
+# symlinks /code/{convertlist.txt,streams_data.json,settings.json} -> data/*,
+# so they survive `docker compose run --rm`.
+#
+# Usage:
+#   docker compose run --rm ffconverter          # first start: config wizard,
+#                                                # then conversion
+#   docker compose run --rm ffconverter          # later starts: streams_data
+#                                                # .json is loaded, wizard only
+#                                                # if you answer "n"
+services:
+  ffconverter:
+    build: .
+    image: ffconverter:local
+    container_name: ffconverter
+    stdin_open: true
+    environment:
+      - TZ=Europe/Moscow
+    volumes:
+      # Host path of the media library (SMB mount) -> /data/media in the
+      # container. Override per machine: MEDIA_PATH=/your/mount docker compose run --rm ffconverter
+      - ${MEDIA_PATH:-/mnt/media}:/data/media
+      - ffconv_data:/code/data
+    # The image entrypoint is already python3 /code/ffmpeg_converter.py.
+    # PUID/PGID are NOT honoured by the jrottenberg image (unlike the alpine
+    # tags) — the container runs as root; harmless for the SMB share.
+
+volumes:
+  ffconv_data:
